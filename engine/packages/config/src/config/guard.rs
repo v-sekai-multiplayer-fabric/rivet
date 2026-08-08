@@ -162,6 +162,16 @@ impl Guard {
 pub struct Https {
 	pub port: u16, // Port for HTTPS traffic
 	pub tls: Tls,  // TLS configuration
+	/// Address the QUIC listener binds, when it must differ from the HTTPS
+	/// listener's.
+	///
+	/// Some substrates route UDP to a specific address rather than to a
+	/// wildcard bind. Fly is one: binding `0.0.0.0` for UDP makes Linux reply
+	/// from the wrong source address, so the listener never completes a
+	/// handshake. Resolved as a hostname, so `fly-global-services` works
+	/// directly.
+	#[serde(default)]
+	pub quic_host: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]

@@ -7,7 +7,7 @@ use std::{
 	time::{Duration, Instant},
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures_util::FutureExt;
 use hyper::service::service_fn;
 use rivet_runtime::TermSignal;
@@ -73,12 +73,24 @@ pub async fn run_server(
 	};
 
 	// HTTP/3 listens on the HTTPS port over UDP, which is the conventional
-	// pairing, so no new configuration field is needed. It needs its own
-	// rustls config because QUIC requires an ALPN of `h3`.
+	// pairing, so no new port field is needed. It needs its own rustls config
+	// because QUIC requires an ALPN of `h3`.
 	if let (Some(https_addr), Some(factory), Some(resolver_fn)) =
 		(&https_addr, &https_factory, &cert_resolver_fn)
 	{
-		let h3_addr = *https_addr;
+		// The UDP bind address may have to differ from the TCP one. See
+		// `guard.https.quic_host`.
+		let h3_addr = match config.guard().https.as_ref().and_then(|h| h.quic_host.clone()) {
+			Some(host) => {
+				let target = format!("{host}:{}", https_addr.port());
+				tokio::net::lookup_host(&target)
+					.await
+					.with_context(|| format!("failed to resolve quic_host {target}"))?
+					.next()
+					.with_context(|| format!("quic_host {target} resolved to no addresses"))?
+			}
+			None => *https_addr,
+		};
 		let h3_factory = factory.clone();
 		let h3_tls = create_tls_config(resolver_fn.clone());
 

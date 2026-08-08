@@ -775,6 +775,14 @@
           "format": "uint16",
           "minimum": 0.0
         },
+        "quic_host": {
+          "description": "Address the QUIC listener binds, when it must differ from the HTTPS listener's.\n\nSome substrates route UDP to a specific address rather than to a wildcard bind. Fly is one: binding `0.0.0.0` for UDP makes Linux reply from the wrong source address, so the listener never completes a handshake. Resolved as a hostname, so `fly-global-services` works directly.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "tls": {
           "$ref": "#/definitions/Tls"
         }
