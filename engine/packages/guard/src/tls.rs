@@ -1,224 +1,137 @@
+//! Certificate loading for Guard's TLS listeners.
+//!
+//! The certificate lives behind a swappable slot rather than being loaded once
+//! and captured. That is what lets HTTP-01 work: ACME cannot complete until the
+//! plain HTTP listener is answering challenges, but the QUIC listener is only
+//! spawned when a resolver already exists (`guard-core/src/server.rs`). So the
+//! resolver is handed over immediately with an empty slot, both listeners bind,
+//! and the certificate is swapped in when it arrives.
+//!
+//! A handshake attempted before then fails rather than serving something wrong.
+
+use std::fs::File;
+use std::io::BufReader;
+use std::path::Path;
+use std::sync::Arc;
+
 use anyhow::*;
 use gas::prelude::*;
+use parking_lot::RwLock;
 use rivet_guard_core::CertResolverFn;
+use rustls::crypto::ring::sign::any_supported_type;
+use rustls::sign::CertifiedKey;
 
-// /// Certificate pair with name for logging
-// struct CertificatePair {
-// 	name: &'static str,
-// 	cert_path: Box<Path>,
-// 	key_path: Box<Path>,
-// }
-
-// /// Helper function to load a certificate and key into a CertifiedKey
-// fn load_certified_key(cert_pair: &CertificatePair) -> GlobalResult<Arc<CertifiedKey>> {
-// 	// Validate that paths exist
-// 	if !cert_pair.cert_path.exists() {
-// 		bail!(
-// 			"{} certificate file not found at {:?}",
-// 			cert_pair.name,
-// 			cert_pair.cert_path
-// 		);
-// 	}
-// 	if !cert_pair.key_path.exists() {
-// 		bail!(
-// 			"{} key file not found at {:?}",
-// 			cert_pair.name,
-// 			cert_pair.key_path
-// 		);
-// 	}
-//
-// 	tracing::debug!("Loading {} certificate from:", cert_pair.name);
-// 	tracing::debug!("  Cert: {:?}", cert_pair.cert_path);
-// 	tracing::debug!("  Key: {:?}", cert_pair.key_path);
-//
-// 	// Load certificate
-// 	let cert_file = match File::open(&cert_pair.cert_path) {
-// 		Ok(file) => file,
-// 		Err(e) => bail!("Failed to open {} certificate file: {}", cert_pair.name, e),
-// 	};
-// 	let cert_reader = &mut BufReader::new(cert_file);
-//
-// 	let cert_chain = match certs(cert_reader).collect::<Result<Vec<_>, _>>() {
-// 		Ok(chain) => chain,
-// 		Err(e) => bail!("Failed to parse {} certificate: {}", cert_pair.name, e),
-// 	};
-//
-// 	if cert_chain.is_empty() {
-// 		bail!(
-// 			"No certificates found in {} certificate file",
-// 			cert_pair.name
-// 		);
-// 	}
-//
-// 	// Load private key
-// 	let key_file = match File::open(&cert_pair.key_path) {
-// 		Ok(file) => file,
-// 		Err(e) => bail!("Failed to open {} key file: {}", cert_pair.name, e),
-// 	};
-// 	let key_reader = &mut BufReader::new(key_file);
-//
-// 	let key_der = match private_key(key_reader) {
-// 		Ok(Some(key)) => key,
-// 		Ok(None) => bail!("No private key found in {} key file", cert_pair.name),
-// 		Err(e) => bail!("Failed to parse {} key: {}", cert_pair.name, e),
-// 	};
-//
-// 	let signing_key = match any_supported_type(&key_der) {
-// 		Ok(key) => key,
-// 		Err(e) => bail!("Failed to load {} signing key: {}", cert_pair.name, e),
-// 	};
-//
-// 	tracing::info!("{} certificate loaded successfully", cert_pair.name);
-// 	Ok(Arc::new(CertifiedKey::new(cert_chain, signing_key)))
-// }
-
-/// Create a certificate resolver function for TLS
+/// The certificate Guard is currently serving, if any.
 ///
-/// This function sets up a certificate resolver that will serve:
-/// - Actor certificate for hostnames that match the actor routing logic
-/// - API certificate for all other hostnames
-///
-/// It follows the same routing logic as the main routing function to ensure
-/// consistent behavior between routing and certificate selection.
-#[tracing::instrument(skip_all)]
-pub async fn create_cert_resolver(
-	_ctx: &gas::prelude::StandaloneCtx,
-) -> Result<Option<CertResolverFn>> {
-	return Ok(None);
-
-	// // Get the Guard configuration
-	// let guard_config = match ctx.config().guard() {
-	// 	Ok(config) => config,
-	// 	Err(e) => {
-	// 		tracing::warn!("Failed to get Guard configuration: {}", e);
-	// 		return Ok(None);
-	// 	}
-	// };
-	//
-	// // If HTTPS is not configured, return None
-	// let https_config = match &guard_config.https {
-	// 	Some(config) => config,
-	// 	None => {
-	// 		tracing::info!("HTTPS configuration not found in Guard config - TLS disabled");
-	// 		return Ok(None);
-	// 	}
-	// };
-	//
-	// // TLS config is directly in the HTTPS config section
-	// let tls_config = &https_config.tls;
-	//
-	// // Load certificates
-	// let api_cert = load_certified_key(&CertificatePair {
-	// 	name: "API",
-	// 	cert_path: Path::new(&tls_config.api_cert_path).into(),
-	// 	key_path: Path::new(&tls_config.api_key_path).into(),
-	// })?;
-	//
-	// // Load actor certificate
-	// let actor_cert = load_certified_key(&CertificatePair {
-	// 	name: "Actor",
-	// 	cert_path: Path::new(&tls_config.actor_cert_path).into(),
-	// 	key_path: Path::new(&tls_config.actor_key_path).into(),
-	// })?;
-	//
-	// // Get the datacenter ID from config
-	// let dc_id = ctx.config().server()?.rivet.edge()?.datacenter_id;
-	//
-	// // Get datacenter information to get the guard public hostname
-	// let dc_res = ctx
-	// 	.op(cluster::ops::datacenter::get::Input {
-	// 		datacenter_ids: vec![dc_id],
-	// 	})
-	// 	.await?;
-	//
-	// let dc = unwrap!(dc_res.datacenters.first());
-	// let guard_hostname = &dc.guard_public_hostname;
-	// let api_hostname = ctx
-	// 	.config()
-	// 	.server()?
-	// 	.rivet
-	// 	.edge_api_routing_host(&dc.name_id)?;
-	//
-	// tracing::info!("Using datacenter guard hostname: {:?}", guard_hostname);
-	// if let Some(api_host) = &api_hostname {
-	// 	tracing::info!("Using datacenter API hostname: {:?}", api_host);
-	// }
-	//
-	// // Get the hostname regexes for actor routing with hostname-based endpoint type
-	// let actor_hostname_regex_dynamic =
-	// 	match build_actor_hostname_and_path_regex(EndpointType::Hostname, guard_hostname) {
-	// 		Ok(Some((x, _))) => {
-	// 			tracing::info!("Successfully built dynamic hostname actor routing regex");
-	// 			Some(x)
-	// 		}
-	// 		Ok(None) => {
-	// 			tracing::warn!(
-	// 				"Could not build dynamic hostname actor routing regex - pattern will be skipped"
-	// 			);
-	// 			None
-	// 		}
-	// 		Err(e) => bail!(
-	// 			"Failed to build dynamic hostname actor routing regex: {}",
-	// 			e
-	// 		),
-	// 	};
-	// let actor_hostname_regex_static =
-	// 	match build_actor_hostname_and_path_regex(EndpointType::Path, guard_hostname) {
-	// 		Ok(Some((x, _))) => {
-	// 			tracing::info!("Successfully built static path actor routing regex");
-	// 			Some(x)
-	// 		}
-	// 		Ok(None) => {
-	// 			tracing::warn!(
-	// 				"Could not build static path actor routing regex - pattern will be skipped"
-	// 			);
-	// 			None
-	// 		}
-	// 		Err(e) => bail!("Failed to build static path actor routing regex: {}", e),
-	// 	};
-	//
-	// // Create resolver function that matches the routing logic
-	// let api_cert_clone = api_cert.clone();
-	// let actor_cert_clone = actor_cert.clone();
-	// let api_hostname_clone = api_hostname.clone();
-	//
-	// let resolver_fn: CertResolverFn = Arc::new(
-	// 	move |hostname: &str| -> Result<Arc<CertifiedKey>, Box<dyn Error + Send + Sync>> {
-	// 		// Extract just the host, stripping the port if present
-	// 		let host = hostname.split(':').next().unwrap_or(hostname);
-	//
-	// 		// First check if hostname matches the actor pattern
-	// 		// This follows the same routing precedence as in routing/mod.rs
-	// 		if let Some(x) = &actor_hostname_regex_dynamic {
-	// 			if x.is_match(host) {
-	// 				tracing::debug!(
-	// 					"Using dynamic hostname actor certificate for hostname: {}",
-	// 					host
-	// 				);
-	// 				return Ok(actor_cert_clone.clone());
-	// 			}
-	// 		}
-	// 		if let Some(x) = &actor_hostname_regex_static {
-	// 			if x.is_match(host) {
-	// 				tracing::debug!(
-	// 					"Using static hostname actor certificate for hostname: {}",
-	// 					host
-	// 				);
-	// 				return Ok(actor_cert_clone.clone());
-	// 			}
-	// 		}
-	//
-	// 		// Then check if it matches the API hostname
-	// 		if let Some(api_host) = &api_hostname_clone {
-	// 			if host == api_host {
-	// 				tracing::debug!("Using API certificate for API hostname: {}", host);
-	// 				return Ok(api_cert_clone.clone());
-	// 			}
-	// 		}
-	//
-	// 		bail!("Did not match any routes")
-	// 	},
-	// );
-	//
-	// Ok(Some(resolver_fn))
+/// `parking_lot` rather than `tokio::sync` because rustls calls the resolver
+/// synchronously from inside the handshake, which is a forced-sync context.
+#[derive(Clone, Default)]
+pub struct CertSlot {
+	inner: Arc<RwLock<Option<Arc<CertifiedKey>>>>,
 }
+
+impl CertSlot {
+	pub fn new() -> Self {
+		Self::default()
+	}
+
+	pub fn get(&self) -> Option<Arc<CertifiedKey>> {
+		self.inner.read().clone()
+	}
+
+	pub fn set(&self, cert: Arc<CertifiedKey>) {
+		*self.inner.write() = Some(cert);
+	}
+
+	/// Load a PEM certificate chain and private key into the slot.
+	pub fn load_from_paths(&self, cert_path: &Path, key_path: &Path) -> Result<()> {
+		let cert = load_certified_key(cert_path, key_path)?;
+		self.set(cert);
+
+		tracing::info!(
+			cert_path = %cert_path.display(),
+			"loaded TLS certificate"
+		);
+
+		Ok(())
+	}
+}
+
+/// Read a PEM chain and key from disk into a rustls `CertifiedKey`.
+pub fn load_certified_key(cert_path: &Path, key_path: &Path) -> Result<Arc<CertifiedKey>> {
+	let cert_file = File::open(cert_path)
+		.with_context(|| format!("failed to open certificate {}", cert_path.display()))?;
+	let cert_chain = rustls_pemfile::certs(&mut BufReader::new(cert_file))
+		.collect::<std::result::Result<Vec<_>, _>>()
+		.with_context(|| format!("failed to parse certificate {}", cert_path.display()))?;
+
+	ensure!(
+		!cert_chain.is_empty(),
+		"certificate {} contains no certificates",
+		cert_path.display()
+	);
+
+	let key_file = File::open(key_path)
+		.with_context(|| format!("failed to open private key {}", key_path.display()))?;
+	let key = rustls_pemfile::private_key(&mut BufReader::new(key_file))
+		.with_context(|| format!("failed to parse private key {}", key_path.display()))?
+		.with_context(|| format!("private key {} contains no key", key_path.display()))?;
+
+	let signing_key = any_supported_type(&key)
+		.with_context(|| format!("unsupported private key type in {}", key_path.display()))?;
+
+	Ok(Arc::new(CertifiedKey::new(cert_chain, signing_key)))
+}
+
+/// Build the resolver Guard serves TLS from.
+///
+/// Returns `None` only when HTTPS is not configured at all, because that is the
+/// signal `guard-core` uses to skip both the TLS acceptor and the QUIC
+/// listener. A configured-but-not-yet-issued certificate still yields a
+/// resolver, so the listeners bind and ACME has somewhere to deliver to.
+pub async fn create_cert_resolver(
+	ctx: &gas::prelude::StandaloneCtx,
+) -> Result<Option<(CertResolverFn, CertSlot)>> {
+	let Some(https) = &ctx.config().guard().https else {
+		tracing::info!("no HTTPS configuration, TLS and HTTP/3 disabled");
+		return Ok(None);
+	};
+
+	let slot = CertSlot::new();
+
+	// A certificate already on disk is served immediately. This is the path a
+	// local run takes, and the path a restart takes once ACME has written one.
+	//
+	// Only the API pair is read: one certificate covers both surfaces in a
+	// single-host deployment, and the actor/API split existed to serve
+	// different hostnames from datacenter config that no longer exists.
+	let cert_path = &https.tls.api_cert_path;
+	let key_path = &https.tls.api_key_path;
+
+	if cert_path.exists() && key_path.exists() {
+		// A certificate that is present but unreadable is a configuration
+		// error, not a reason to start without TLS.
+		slot.load_from_paths(cert_path, key_path)
+			.context("failed to load the configured TLS certificate")?;
+	} else {
+		tracing::info!(
+			cert_path = %cert_path.display(),
+			"no certificate on disk yet, TLS handshakes will fail until one is issued"
+		);
+	}
+
+	let resolver_slot = slot.clone();
+	let resolver: CertResolverFn = Arc::new(move |server_name: &str| {
+		resolver_slot.get().ok_or_else(|| {
+			let err: Box<dyn std::error::Error + Send + Sync> =
+				format!("no certificate available yet for {server_name}").into();
+			err
+		})
+	});
+
+	Ok(Some((resolver, slot)))
+}
+
+#[cfg(test)]
+#[path = "tls/tests.rs"]
+mod tests;
