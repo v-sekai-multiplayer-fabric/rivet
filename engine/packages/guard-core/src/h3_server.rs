@@ -23,7 +23,9 @@ use hyper::header::HeaderMap;
 use hyper_tungstenite::tungstenite::protocol::Role;
 use std::future::Future;
 use std::net::SocketAddr;
+use std::time::Duration;
 use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 use tokio_tungstenite::WebSocketStream;
 
 use crate::websocket_handle::WebSocketHandle;
@@ -31,6 +33,12 @@ use crate::websocket_handle::WebSocketHandle;
 /// ALPN identifier for HTTP/3. A QUIC client must offer this to reach the
 /// listener.
 pub const ALPN_H3: &[u8] = b"h3";
+
+/// How long a stream may take to name its target before it is dropped.
+const STREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Upper bound on the routing path a stream may name.
+const MAX_STREAM_PATH_LEN: u16 = 2048;
 
 /// The parts of the CONNECT request that opened a WebTransport session.
 ///
@@ -169,16 +177,38 @@ where
 {
 	loop {
 		match session.accept_bi().await {
-			Result::Ok(Some(AcceptedBi::BidiStream(_session_id, stream))) => {
-				// `BidiStream` implements tokio's AsyncRead and AsyncWrite, so
-				// tungstenite drives it directly. The handshake already
-				// happened at the CONNECT layer, so the stream starts in the
-				// established state.
-				let ws_stream = WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
-				let handle = WebSocketHandle::from_stream(ws_stream);
+			Result::Ok(Some(AcceptedBi::BidiStream(_session_id, mut stream))) => {
+				let req = req.clone();
+				let on_websocket = on_websocket.clone();
 
-				let fut = on_websocket(handle, req.clone());
-				tokio::spawn(fut);
+				tokio::spawn(async move {
+					// A session CONNECTs to one path, and streams inside it carry
+					// none of their own, so one session would otherwise reach one
+					// actor. Reading a target per stream is what lets a single
+					// QUIC connection serve two zones, which is the point: two
+					// sessions would mean two congestion controllers.
+					let path = match read_stream_path(&mut stream).await {
+						Result::Ok(Some(path)) => path,
+						Result::Ok(None) => req.path.clone(),
+						Err(err) => {
+							tracing::debug!(?err, "dropping stream that never named a target");
+							return;
+						}
+					};
+
+					let mut stream_req = req;
+					stream_req.path = path;
+
+					// `BidiStream` implements tokio's AsyncRead and AsyncWrite, so
+					// tungstenite drives it directly. The handshake already
+					// happened at the CONNECT layer, so the stream starts in the
+					// established state.
+					let ws_stream =
+						WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
+					let handle = WebSocketHandle::from_stream(ws_stream);
+
+					on_websocket(handle, stream_req).await;
+				});
 			}
 			Result::Ok(Some(AcceptedBi::Request(..))) => {
 				// A nested HTTP/3 request inside the session. Guard has no use
@@ -193,3 +223,50 @@ where
 		}
 	}
 }
+
+/// Read the routing target a stream names before its WebSocket framing starts.
+///
+/// The header is a big-endian `u16` length followed by that many UTF-8 bytes. A
+/// length of zero means the stream inherits the session's CONNECT path, so a
+/// client that only talks to one actor sends two zero bytes and nothing else.
+///
+/// This is read before tungstenite sees the stream, because the frames after it
+/// are ordinary WebSocket frames and must arrive unmodified.
+async fn read_stream_path<S>(stream: &mut S) -> Result<Option<String>>
+where
+	S: tokio::io::AsyncRead + Unpin,
+{
+	let read = async {
+		let mut len_buf = [0u8; 2];
+		stream.read_exact(&mut len_buf).await?;
+		let len = u16::from_be_bytes(len_buf);
+
+		if len == 0 {
+			return Result::Ok(None);
+		}
+
+		ensure!(
+			len <= MAX_STREAM_PATH_LEN,
+			"stream named a target of {len} bytes, over the {MAX_STREAM_PATH_LEN} limit"
+		);
+
+		let mut path = vec![0u8; len as usize];
+		stream.read_exact(&mut path).await?;
+
+		let path = String::from_utf8(path).context("stream target is not valid UTF-8")?;
+		ensure!(
+			path.starts_with('/'),
+			"stream target must be an absolute path"
+		);
+
+		Result::Ok(Some(path))
+	};
+
+	tokio::time::timeout(STREAM_HEADER_TIMEOUT, read)
+		.await
+		.context("stream did not name a target in time")?
+}
+
+#[cfg(test)]
+#[path = "h3_server/tests.rs"]
+mod tests;
