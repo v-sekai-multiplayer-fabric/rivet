@@ -6,6 +6,9 @@ extends MCPCommands
 ## already use, which is proxied by `container-runner` and reachable through
 ## Rivet's gateway.
 ##
+## Accepts `.glb` only. `.gltf` references external buffers and textures that a
+## single-file upload cannot carry, so it is not a supported input here.
+##
 ## Bytes move in chunks because MCP is JSON-RPC and JSON has no binary type.
 ## Each chunk is base64, which inflates by 4/3, so `CHUNK_BYTES` is chosen to
 ## keep an encoded chunk well inside Rivet's 20 MiB request-body limit. A 100 MB

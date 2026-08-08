@@ -79,7 +79,7 @@ export default function App() {
 			objectUrl.current = URL.createObjectURL(blob);
 			setResult({
 				url: objectUrl.current,
-				name: file.name.replace(/\.(glb|gltf|vrm)$/i, "") + ".scn",
+				name: file.name.replace(/\.glb$/i, "") + ".scn",
 				bytes: blob.size,
 			});
 			setPhase("done");
@@ -114,7 +114,7 @@ export default function App() {
 					Model
 					<input
 						type="file"
-						accept=".glb,.gltf,.vrm"
+						accept=".glb"
 						onChange={(e) => setFile(e.target.files?.[0] ?? null)}
 						disabled={busy}
 						style={{ display: "block", marginTop: ".25rem" }}

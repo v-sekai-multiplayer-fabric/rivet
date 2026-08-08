@@ -3,6 +3,10 @@
 A page that posts a `.glb` to a Godot zone actor and downloads a compressed
 Godot scene back.
 
+**glb only.** `.gltf` references external `.bin` and texture files that a
+single-file upload cannot carry, so it is excluded rather than merely
+unsupported. vrm is deferred.
+
 Follows `examples/raw-fetch-handler`: point a client at the engine, address the
 actor by name and key, and use `actor.fetch(path)` for raw HTTP. The client
 handles actor addressing, so this page never constructs a URL or sets

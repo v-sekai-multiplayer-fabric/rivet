@@ -6,7 +6,7 @@ extends "res://addons/vsekai_godot_mcp/mcp_protocol.gd"
 func _tool_defs() -> Array:
 	return super._tool_defs() + [
 		["asset_begin",
-			"Start a glb upload. Returns an id and the chunk size to send.",
+			"Start a glb upload (glb only, not gltf). Returns an id and chunk size.",
 			{ "name": "string" }],
 		["asset_chunk",
 			"Append one base64 chunk. Pass offset to make the append checked.",
