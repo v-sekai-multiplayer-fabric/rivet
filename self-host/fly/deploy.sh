@@ -127,7 +127,7 @@ fi
 
 log "Setting Godot zone secrets"
 flyctl secrets set --app "${GODOT_APP}" \
-	"RIVET_ENDPOINT=https://default:${admin_token}@${engine_host}" \
+	"RIVET_ENDPOINT=http://default:${admin_token}@${ENGINE_APP}.internal:6420" \
 	--stage
 
 log "Deploying the Godot zone"
@@ -145,7 +145,7 @@ log "Registering the runner"
 curl -fsS -X PUT "https://${engine_host}/runner-configs/godot-zone?namespace=default" \
 	-H "Authorization: Bearer ${admin_token}" \
 	-H "Content-Type: application/json" \
-	-d "{\"datacenters\":{\"default\":{\"serverless\":{\"url\":\"https://${GODOT_APP}.fly.dev/api/rivet\",\"request_lifespan\":300,\"max_concurrent_actors\":4}}}}"
+	-d "{\"datacenters\":{\"default\":{\"serverless\":{\"url\":\"https://${GODOT_APP}.fly.dev/api/rivet\",\"request_lifespan\":900,\"drain_grace_period\":60,\"max_concurrent_actors\":4}}}}"
 
 log "Done"
 cat <<EOF
