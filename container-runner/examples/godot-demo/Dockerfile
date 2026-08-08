@@ -6,7 +6,12 @@
 # workspace:
 #   docker build -f container-runner/examples/godot-demo/Dockerfile -t godot-mcp-zone .
 
-ARG GODOT_VERSION=4.7.1-stable
+# The fork's build, not upstream. It is compiled with double precision, which
+# is a compile-time property: mixing a double-precision build with a
+# single-precision one desynchronises rather than failing loudly, so the runtime
+# has to be pinned. See RFD 0011 on Godot runtime provenance.
+ARG GODOT_REPO=v-sekai-multiplayer-fabric/godot-images
+ARG GODOT_RELEASE=v2026.06.27.1907-multiplayer-fabric
 
 # Build the runner binary from this workspace rather than curling a release, so
 # the demo tracks the fork rather than an upstream artifact.
@@ -19,20 +24,29 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release -p rivet-container-runner --bin rivet-container-runner \
     && cp target/release/rivet-container-runner /rivet-container-runner
 
-# The upstream Godot release. Godot 4 ships one Linux binary that runs headless
-# with `--headless`, so there is no separate server download.
-FROM --platform=linux/amd64 debian:bookworm-slim AS godot-fetch
-ARG GODOT_VERSION
+# The fork's editor build runs headless with `--headless`, so there is no
+# separate server download. The archive nests the binary under a directory named
+# for the build's commit, so it is located rather than assumed.
+FROM --platform=linux/amd64 debian:trixie-slim AS godot-fetch
+ARG GODOT_REPO
+ARG GODOT_RELEASE
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL -o /tmp/godot.zip \
-      "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip" \
+      "https://github.com/${GODOT_REPO}/releases/download/${GODOT_RELEASE}/linux-editor.zip" \
     && unzip -q /tmp/godot.zip -d /tmp/godot \
-    && mv /tmp/godot/Godot_v${GODOT_VERSION}_linux.x86_64 /godot \
-    && chmod +x /godot
+    && mv "$(find /tmp/godot -type f -name 'godot.linuxbsd.editor.double.*' | head -1)" /godot \
+    && chmod +x /godot \
+    && rm -rf /tmp/godot /tmp/godot.zip
 
-FROM --platform=linux/amd64 debian:bookworm-slim
+# Fail here rather than at actor start if the wrong build was published. A
+# single-precision runtime is not a substitute: it desynchronises silently.
+RUN /godot --headless --version | grep -q '\.double\.'
+
+# trixie, not bookworm: the fork's build requires GLIBC 2.38 and bookworm ships
+# 2.36, which fails at exec with a version error rather than at build time.
+FROM --platform=linux/amd64 debian:trixie-slim
 
 # Godot links against these even under --headless.
 RUN apt-get update \
