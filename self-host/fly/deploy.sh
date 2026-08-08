@@ -108,10 +108,30 @@ flyctl secrets set --app "${ENGINE_APP}" \
 	--stage
 
 log "Deploying the engine"
-flyctl deploy . \
+# The image is the stock engine image, not a fork-specific one. This fork makes
+# `foundationdb` a default cargo feature and the stock runtime already carries
+# libfdb_c.so, so the standard build produces an FDB-capable engine with the
+# dashboard embedded. BUILD_FRONTEND is required: without frontend/dist the
+# build script substitutes a placeholder page for /ui/.
+#
+# It is built locally and pushed rather than built on a Fly builder, because the
+# frontend build wants 8 GB of heap.
+log "Building the stock engine image locally"
+docker build \
+	--file docker/engine/Dockerfile \
+	--target engine-full \
+	--build-arg BUILD_FRONTEND=true \
+	--build-arg CARGO_BUILD_MODE=release \
+	--tag "registry.fly.io/${ENGINE_APP}:latest" \
+	.
+
+flyctl auth docker
+docker push "registry.fly.io/${ENGINE_APP}:latest"
+
+flyctl deploy \
 	--app "${ENGINE_APP}" \
 	--config self-host/fly/engine/fly.toml \
-	--dockerfile self-host/fly/engine/Dockerfile \
+	--image "registry.fly.io/${ENGINE_APP}:latest" \
 	--regions "${REGION}" \
 	--ha=false \
 	--yes

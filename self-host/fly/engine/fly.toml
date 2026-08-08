@@ -7,8 +7,6 @@
 app = "mf-rivet-engine"
 primary_region = "sjc"
 
-[build]
-  dockerfile = "Dockerfile"
 
 [env]
   RIVET__FOUNDATIONDB__CLUSTER_FILE_WRITE_PATH = "/etc/foundationdb/fdb.cluster"
