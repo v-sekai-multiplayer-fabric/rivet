@@ -1,0 +1,32 @@
+# FoundationDB cluster.
+#
+# This app has no public services on purpose. It is reachable only over 6PN by
+# the engine app in the same org.
+#
+# Coordinators are addressed by IP, so machine count and identity are load
+# bearing. Scale by cloning machines, never by letting Fly recreate them.
+
+app = "mf-rivet-fdb"
+primary_region = "sea"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  FDB_PORT = "4500"
+  FDB_CLUSTER_FILE = "/var/fdb/fdb.cluster"
+  FDB_DATA_DIR = "/var/fdb/data"
+  FDB_LOG_DIR = "/var/fdb/logs"
+  FDB_CLUSTER_DESCRIPTION = "rivet"
+  FDB_CLUSTER_ID = "rivet"
+  FDB_CLASS = "unset"
+
+[mounts]
+  source = "fdb_data"
+  destination = "/var/fdb"
+
+# FDB reacts badly to being stopped underneath a transaction, and a suspended
+# coordinator takes the cluster down, so these machines always stay running.
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"

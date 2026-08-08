@@ -26,6 +26,18 @@
         }
       },
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "foundationdb"
+      ],
+      "properties": {
+        "foundationdb": {
+          "$ref": "#/definitions/FoundationDb"
+        }
+      },
+      "additionalProperties": false
     }
   ],
   "properties": {
@@ -505,6 +517,50 @@
       "properties": {
         "path": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "FoundationDb": {
+      "type": "object",
+      "properties": {
+        "addresses": {
+          "description": "Coordinator addresses. When set without `cluster_file`, a cluster file is written to `cluster_file_write_path` on startup. IPv6 addresses must be bracketed, which is how Fly 6PN addresses arrive.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "cluster_description": {
+          "description": "Cluster description used when generating a cluster file from `addresses`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cluster_file": {
+          "description": "Path to an existing `fdb.cluster` file. Takes precedence over `addresses`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cluster_file_write_path": {
+          "description": "Where a generated cluster file is written.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cluster_id": {
+          "description": "Cluster ID used when generating a cluster file from `addresses`.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false

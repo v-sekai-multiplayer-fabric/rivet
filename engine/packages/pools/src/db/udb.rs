@@ -40,6 +40,25 @@ pub async fn setup(config: &Config) -> Result<Option<UdbPool>> {
 			Arc::new(universaldb::driver::RocksDbDatabaseDriver::new(fs.path.clone()).await?)
 				as universaldb::DatabaseDriverHandle
 		}
+		#[cfg(feature = "foundationdb")]
+		config::Database::FoundationDb(fdb) => {
+			let cluster_file = fdb.resolve_cluster_file()?;
+
+			Arc::new(
+				universaldb::driver::FdbDatabaseDriver::new(
+					universaldb::driver::fdb::FdbConfig {
+						cluster_file: Some(cluster_file),
+					},
+				)
+				.await?,
+			) as universaldb::DatabaseDriverHandle
+		}
+		#[cfg(not(feature = "foundationdb"))]
+		config::Database::FoundationDb(_) => {
+			bail!(
+				"engine was built without the foundationdb feature; rebuild with `--features rivet-pools/foundationdb`"
+			)
+		}
 	};
 
 	tracing::debug!("udb started");

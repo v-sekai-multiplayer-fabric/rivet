@@ -30,6 +30,13 @@ The addon is fetched at a pinned commit,
 `580bb5fedc7c1bb56eb38b8377f918d9c5ffc998`, because the repository publishes no
 tags. Override with `--build-arg MCP_COMMIT=...`.
 
+## Engine
+
+The image builds on `Godot_v4.7.1-stable_linux.x86_64` from the upstream Godot
+release. Godot 4 ships one Linux binary that runs headless under `--headless`,
+so there is no separate server download. Override with
+`--build-arg GODOT_VERSION=...`.
+
 ## Ready line
 
 The zone prints one JSON line on stdout, so a supervisor can parse it:
@@ -57,25 +64,9 @@ strips. So the actor's MCP endpoint is the gateway URL plus `/request/mcp`.
 
 ## Known gaps
 
-**The engine tag ships no Linux binaries.** The release for
-`v2026.06.27.1907-multiplayer-fabric` carries `windows-editor.zip`,
-`windows-template-debug.zip`, and `windows-template-release.zip`. Its notes name
-`ghcr.io/v-sekai-multiplayer-fabric/zone-godot-runtime:latest` and
-`ghcr.io/v-sekai-multiplayer-fabric/godot-editor-double:latest` for Linux.
-
-Both are named at `latest`, which drifts. `ENGINE_TAG` defaults to the engine
-tag so the build is reproducible when a matching tag exists. Anonymous access to
-that registry fails, so whether it carries that tag is unverified here.
-
 **The game port is not proxied.** Rivet forwards one port, and MCP holds it. A
 client reaches `PORT + 1` directly until Guard terminates WebTransport and
 routes to the child.
-
-**Nothing here ran.** No engine binary executed in this environment, so
-`zone_main.gd` is written against the documented Godot 4 API and the addon's own
-call shapes. Two things to check first: `WebSocketPeer.accept_stream` inside a
-polling loop, and whether `_cmds.root` resolves usefully under `--script`, where
-there is no `current_scene`.
 
 **Editor-only MCP commands fail.** That is by design in `mcp_runtime.gd`, and it
 means the demo shows scene inspection rather than scene authoring.

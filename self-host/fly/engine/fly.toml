@@ -1,0 +1,39 @@
+# Rivet Engine backed by the FoundationDB cluster in the mf-rivet-fdb app.
+#
+# FDB_COORDINATORS is not set here because coordinator addresses are only known
+# after the FDB machines exist. deploy.sh reads them back and sets them as a
+# secret, so they stay out of the repo.
+
+app = "mf-rivet-engine"
+primary_region = "sea"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  RIVET__FOUNDATIONDB__CLUSTER_FILE_WRITE_PATH = "/etc/foundationdb/fdb.cluster"
+  RIVET__FOUNDATIONDB__CLUSTER_DESCRIPTION = "rivet"
+  RIVET__FOUNDATIONDB__CLUSTER_ID = "rivet"
+
+[http_service]
+  internal_port = 6420
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 2000
+    soft_limit = 1500
+
+[[http_service.checks]]
+  grace_period = "30s"
+  interval = "15s"
+  method = "GET"
+  timeout = "5s"
+  path = "/health"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"

@@ -1,0 +1,29 @@
+# Headless Godot MCP zone, hosted by container-runner as a Rivet actor.
+#
+# The image comes from container-runner/examples/godot-demo/Dockerfile, so this
+# app is deployed from the repo root with:
+#   flyctl deploy --config self-host/fly/godot-zone/fly.toml \
+#     --dockerfile container-runner/examples/godot-demo/Dockerfile .
+#
+# RIVET_ENDPOINT points at the engine and is set as a secret by deploy.sh,
+# because it carries the admin token.
+
+app = "mf-rivet-godot"
+primary_region = "sea"
+
+[env]
+  GODOT_PROJECT = "/opt/zone"
+  ZONE_SCRIPT = "zone_main.gd"
+
+# container-runner serves the actor surface, and each actor's child gets its own
+# port behind it. Actors are cold started on demand, so machines may stop.
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"

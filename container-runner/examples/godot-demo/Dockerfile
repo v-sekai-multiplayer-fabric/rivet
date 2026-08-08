@@ -1,17 +1,12 @@
 # syntax=docker/dockerfile:1
 #
-# A Rivet actor that serves the engine's WebTransport echo demo.
+# A Rivet actor that serves a headless Godot MCP zone.
 #
 # Build from the rivet repo root, because the runner binary comes from this
 # workspace:
-#   docker build -f container-runner/examples/godot-demo/Dockerfile -t godot-wt-demo .
+#   docker build -f container-runner/examples/godot-demo/Dockerfile -t godot-mcp-zone .
 
-# The engine build. The release notes for tag v2026.06.27.1907-multiplayer-fabric
-# ship Windows archives only, and they name these Linux images for the server
-# side. ENGINE_TAG defaults to that engine tag; fall back to `latest` if the
-# registry carries no tag of that name.
-ARG ENGINE_IMAGE=ghcr.io/v-sekai-multiplayer-fabric/zone-godot-runtime
-ARG ENGINE_TAG=v2026.06.27.1907-multiplayer-fabric
+ARG GODOT_VERSION=4.7.1-stable
 
 # Build the runner binary from this workspace rather than curling a release, so
 # the demo tracks the fork rather than an upstream artifact.
@@ -24,14 +19,31 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release -p rivet-container-runner --bin rivet-container-runner \
     && cp target/release/rivet-container-runner /rivet-container-runner
 
-FROM ${ENGINE_IMAGE}:${ENGINE_TAG}
+# The upstream Godot release. Godot 4 ships one Linux binary that runs headless
+# with `--headless`, so there is no separate server download.
+FROM --platform=linux/amd64 debian:bookworm-slim AS godot-fetch
+ARG GODOT_VERSION
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl unzip \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL -o /tmp/godot.zip \
+      "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip" \
+    && unzip -q /tmp/godot.zip -d /tmp/godot \
+    && mv /tmp/godot/Godot_v${GODOT_VERSION}_linux.x86_64 /godot \
+    && chmod +x /godot
 
+FROM --platform=linux/amd64 debian:bookworm-slim
+
+# Godot links against these even under --headless.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates libfontconfig1 libfreetype6 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=godot-fetch /godot /usr/local/bin/godot
 COPY --from=runner-builder /rivet-container-runner /usr/local/bin/rivet-container-runner
 COPY container-runner/examples/godot-demo/entrypoint.sh /usr/local/bin/godot-demo-entrypoint
 
-# GODOT_BIN, GODOT_PROJECT and DEMO_SCRIPT let an actor override the engine
-# path, the project, and the script without a rebuild. The actor `input` can
-# also override them through its `env` map.
 # The in-editor MCP addon, which also runs headless. Pinned by commit, because
 # the repository publishes no tags.
 ARG MCP_REPO=https://github.com/v-sekai-multiplayer-fabric/vsekai-godot-mcp
@@ -44,13 +56,16 @@ RUN mkdir -p /opt/zone/addons \
 
 COPY container-runner/examples/godot-demo/project /opt/zone
 
-ENV GODOT_BIN=godot \
+# Godot writes its config and import cache under $HOME.
+ENV HOME=/tmp \
+    GODOT_BIN=godot \
     GODOT_PROJECT=/opt/zone \
     ZONE_SCRIPT=zone_main.gd
 
+# Import the project once so the first actor start does not pay for it.
+RUN godot --headless --path /opt/zone --import || true
+
 # The runner is the entrypoint. Everything after `--` is the child command
 # template, which an actor `input.command` may replace.
-# The default TCP readiness probe works, because the child's WebSocket
-# listener is TCP. --readiness-beacon exists for a UDP-only child and is not
-# needed here.
+# The default TCP readiness probe works, because the child's MCP listener is TCP.
 ENTRYPOINT ["/usr/local/bin/rivet-container-runner", "--", "/usr/local/bin/godot-demo-entrypoint"]

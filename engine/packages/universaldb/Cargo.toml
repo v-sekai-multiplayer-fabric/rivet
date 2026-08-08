@@ -6,14 +6,21 @@ authors.workspace = true
 license.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+# Requires libfdb_c.so at build and run time, so it stays off by default.
+foundationdb = ["dep:foundationdb"]
+
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
 deadpool-postgres.workspace = true
+foundationdb = { workspace = true, optional = true }
 foundationdb-tuple.workspace = true
 futures-util.workspace = true
 hex.workspace = true
 lazy_static.workspace = true
+parking_lot.workspace = true
 rand.workspace = true
 rivet-metrics.workspace = true
 rivet-postgres-util.workspace = true

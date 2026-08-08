@@ -11,9 +11,13 @@ use crate::{
 	value::{Slice, Value, Values},
 };
 
+#[cfg(feature = "foundationdb")]
+pub mod fdb;
 pub mod postgres;
 pub mod rocksdb;
 
+#[cfg(feature = "foundationdb")]
+pub use fdb::FdbDatabaseDriver;
 pub use postgres::PostgresDatabaseDriver;
 pub use rocksdb::RocksDbDatabaseDriver;
 

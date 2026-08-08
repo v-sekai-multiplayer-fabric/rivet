@@ -63,6 +63,9 @@ impl SubCommand {
 						println!("Complete");
 						Ok(())
 					}
+					rivet_config::config::Database::FoundationDb(_) => {
+						bail!("nuke foundationdb not implemented");
+					}
 				}
 			}
 		}

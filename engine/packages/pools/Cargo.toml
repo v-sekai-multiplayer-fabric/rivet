@@ -6,6 +6,10 @@ authors.workspace = true
 license.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+foundationdb = ["universaldb/foundationdb"]
+
 [dependencies]
 anyhow.workspace = true
 async-nats.workspace = true
