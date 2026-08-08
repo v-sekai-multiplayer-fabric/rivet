@@ -30,6 +30,7 @@ use tracing::Instrument;
 use url::Url;
 
 use crate::RouteTarget;
+use crate::custom_serve::CustomServeTrait;
 use crate::request_context::RequestContext;
 use crate::response_body::ResponseBody;
 use crate::route::{CacheKeyFn, ResolveRouteOutput, RouteCache, RoutingFn, RoutingOutput};
@@ -1663,207 +1664,18 @@ impl ProxyService {
 					.instrument(tracing::info_span!("handle_ws_task_target")),
 				);
 			}
-			ResolveRouteOutput::CustomServe(mut handler) => {
+			ResolveRouteOutput::CustomServe(handler) => {
 				tracing::debug!(path=%req_ctx.path, "Spawning task to handle WebSocket communication");
 				let state = self.state.clone();
-				let mut req_ctx = req_ctx.clone();
+				let req_ctx = req_ctx.clone();
 
 				self.state.tasks.spawn(
 					async move {
-						let req_ctx = &mut req_ctx;
-						let mut ws_hibernation_close = false;
-						let mut after_hibernation = false;
-						let mut attempts = 0u32;
-
 						let ws_handle = WebSocketHandle::new(client_ws)
 							.await
 							.context("failed initiating websocket handle")?;
 
-						loop {
-							match handler
-								.handle_websocket(req_ctx, ws_handle.clone(), after_hibernation)
-								.await
-							{
-								Ok(close_frame) => {
-									tracing::debug!("websocket handler complete, closing");
-
-									// Send graceful close. This may fail if client already sent
-									// close frame, which is normal.
-									tracing::debug!(?close_frame, "sending close frame to client");
-									match ws_handle.send(utils::to_hyper_close(close_frame)).await {
-										Ok(_) => {
-											tracing::debug!("close frame sent successfully");
-										}
-										Err(err) => {
-											tracing::debug!(
-												?err,
-												"failed to send close frame (websocket may be already closing)"
-											);
-										}
-									}
-
-									// Flush to ensure close frame is sent
-									tracing::debug!("flushing websocket");
-									match ws_handle.flush().await {
-										Ok(_) => {
-											tracing::debug!("websocket flushed successfully");
-										}
-										Err(err) => {
-											tracing::debug!(
-												?err,
-												"failed to flush websocket (websocket may be already closing)"
-											);
-										}
-									}
-
-									// Keep TCP connection open briefly to allow client to process close
-									tokio::time::sleep(WEBSOCKET_CLOSE_LINGER).await;
-
-									break;
-								}
-								Err(err) => {
-									tracing::debug!(?err, "websocket handler error");
-
-									// Denotes that the connection did not fail, but the downstream has closed
-									let ws_hibernate = utils::is_ws_hibernate(&err);
-
-									if ws_hibernate {
-										attempts = 0;
-									} else {
-										attempts += 1;
-									}
-
-									if ws_hibernate {
-										// This should be unreachable because as soon as the actor is
-										// reconnected to after hibernation the gateway will consume the close
-										// frame from the client ws stream
-										ensure!(
-											!ws_hibernation_close,
-											"should not be hibernating again after receiving a close frame during hibernation"
-										);
-
-										// After this function returns:
-										// - the route will be resolved again
-										// - the websocket will connect to the new downstream target
-										// - the gateway will continue reading messages from the client ws
-										//   (starting with the message that caused the hibernation to end)
-										let res = handler
-											.handle_websocket_hibernation(
-												req_ctx,
-												ws_handle.clone(),
-											)
-											.await?;
-
-										after_hibernation = true;
-
-										// Despite receiving a close frame from the client during hibernation
-										// we are going to reconnect to the actor so that it knows the
-										// connection has closed
-										if let HibernationResult::Close = res {
-											tracing::debug!("starting hibernating websocket close");
-
-											ws_hibernation_close = true;
-										}
-									} else if attempts > req_ctx.retry.max_attempts
-										|| !utils::is_retryable_ws_error(&err)
-									{
-										tracing::debug!(
-											?err,
-											?attempts,
-											max_attempts=?req_ctx.retry.max_attempts,
-											"websocket failed"
-										);
-
-										// Close WebSocket with error
-										ws_handle
-											.send(utils::to_hyper_close(Some(
-												utils::err_to_close_frame(err, req_ctx.ray_id),
-											)))
-											.await?;
-
-										// Flush to ensure close frame is sent
-										ws_handle.flush().await?;
-
-										// Keep TCP connection open briefly to allow client to process close
-										tokio::time::sleep(WEBSOCKET_CLOSE_LINGER).await;
-
-										break;
-									} else {
-										let backoff = utils::calculate_backoff(
-											attempts,
-											req_ctx.retry.initial_interval,
-										);
-
-										tracing::debug!(
-											?backoff,
-											"WebSocket attempt {attempts} failed (service unavailable)"
-										);
-
-										// Apply backoff for retryable error
-										tokio::time::sleep(backoff).await;
-									}
-
-									// Retry route resolution
-									match state.resolve_route(req_ctx, true).await {
-										Ok(ResolveRouteOutput::CustomServe(new_handler)) => {
-											handler = new_handler;
-											continue;
-										}
-										Ok(ResolveRouteOutput::Target(_)) => {
-											let err = errors::WebSocketTargetChanged {
-												phase: "custom_serve_websocket_retry".to_owned(),
-												from_target_kind: "custom_serve".to_owned(),
-												to_target_kind: "target".to_owned(),
-											}
-											.build();
-											tracing::warn!(
-												?err,
-												"websocket target changed to target"
-											);
-											ws_handle
-												.send(utils::to_hyper_close(Some(
-													utils::err_to_close_frame(err, req_ctx.ray_id),
-												)))
-												.await?;
-
-											// Flush to ensure close frame is sent
-											ws_handle.flush().await?;
-
-											// Keep TCP connection open briefly to allow client to process close
-											tokio::time::sleep(WEBSOCKET_CLOSE_LINGER).await;
-
-											break;
-										}
-										Err(err) => {
-											tracing::warn!(
-												?err,
-												"closing websocket due to route resolution error"
-											);
-											ws_handle
-												.send(utils::to_hyper_close(Some(
-													utils::err_to_close_frame(err, req_ctx.ray_id),
-												)))
-												.await?;
-
-											// Flush to ensure close frame is sent
-											ws_handle.flush().await?;
-
-											// Keep TCP connection open briefly to allow client to process close
-											tokio::time::sleep(WEBSOCKET_CLOSE_LINGER).await;
-
-											break;
-										}
-									}
-								}
-							}
-						}
-
-						// Release in-flight counter and request ID when task completes
-						state
-							.release_in_flight(req_ctx.client_ip, req_ctx.in_flight_request_id)
-							.await;
-
-						Ok(())
+						serve_custom_websocket(state, req_ctx, handler, ws_handle).await
 					}
 					.instrument(tracing::info_span!("handle_ws_task_custom_serve")),
 				);
@@ -1890,6 +1702,208 @@ impl ProxyService {
 			ResponseBody::Full(Full::<Bytes>::new(Bytes::new())),
 		))
 	}
+}
+
+/// Drive a `CustomServe` handler over an established WebSocket.
+///
+/// The caller supplies the handle rather than the raw connection, so a hyper
+/// upgrade and a WebTransport bidirectional stream both reach this same path.
+pub(crate) async fn serve_custom_websocket(
+	state: Arc<ProxyState>,
+	mut req_ctx: RequestContext,
+	mut handler: Arc<dyn CustomServeTrait>,
+	ws_handle: WebSocketHandle,
+) -> Result<()> {
+	let req_ctx = &mut req_ctx;
+	let mut ws_hibernation_close = false;
+	let mut after_hibernation = false;
+	let mut attempts = 0u32;
+
+	loop {
+		match handler
+			.handle_websocket(req_ctx, ws_handle.clone(), after_hibernation)
+			.await
+		{
+			Ok(close_frame) => {
+				tracing::debug!("websocket handler complete, closing");
+
+				// Send graceful close. This may fail if client already sent
+				// close frame, which is normal.
+				tracing::debug!(?close_frame, "sending close frame to client");
+				match ws_handle.send(utils::to_hyper_close(close_frame)).await {
+					Ok(_) => {
+						tracing::debug!("close frame sent successfully");
+					}
+					Err(err) => {
+						tracing::debug!(
+							?err,
+							"failed to send close frame (websocket may be already closing)"
+						);
+					}
+				}
+
+				// Flush to ensure close frame is sent
+				tracing::debug!("flushing websocket");
+				match ws_handle.flush().await {
+					Ok(_) => {
+						tracing::debug!("websocket flushed successfully");
+					}
+					Err(err) => {
+						tracing::debug!(
+							?err,
+							"failed to flush websocket (websocket may be already closing)"
+						);
+					}
+				}
+
+				// Keep TCP connection open briefly to allow client to process close
+				tokio::time::sleep(WEBSOCKET_CLOSE_LINGER).await;
+
+				break;
+			}
+			Err(err) => {
+				tracing::debug!(?err, "websocket handler error");
+
+				// Denotes that the connection did not fail, but the downstream has closed
+				let ws_hibernate = utils::is_ws_hibernate(&err);
+
+				if ws_hibernate {
+					attempts = 0;
+				} else {
+					attempts += 1;
+				}
+
+				if ws_hibernate {
+					// This should be unreachable because as soon as the actor is
+					// reconnected to after hibernation the gateway will consume the close
+					// frame from the client ws stream
+					ensure!(
+						!ws_hibernation_close,
+						"should not be hibernating again after receiving a close frame during hibernation"
+					);
+
+					// After this function returns:
+					// - the route will be resolved again
+					// - the websocket will connect to the new downstream target
+					// - the gateway will continue reading messages from the client ws
+					//   (starting with the message that caused the hibernation to end)
+					let res = handler
+						.handle_websocket_hibernation(
+							req_ctx,
+							ws_handle.clone(),
+						)
+						.await?;
+
+					after_hibernation = true;
+
+					// Despite receiving a close frame from the client during hibernation
+					// we are going to reconnect to the actor so that it knows the
+					// connection has closed
+					if let HibernationResult::Close = res {
+						tracing::debug!("starting hibernating websocket close");
+
+						ws_hibernation_close = true;
+					}
+				} else if attempts > req_ctx.retry.max_attempts
+					|| !utils::is_retryable_ws_error(&err)
+				{
+					tracing::debug!(
+						?err,
+						?attempts,
+						max_attempts=?req_ctx.retry.max_attempts,
+						"websocket failed"
+					);
+
+					// Close WebSocket with error
+					ws_handle
+						.send(utils::to_hyper_close(Some(
+							utils::err_to_close_frame(err, req_ctx.ray_id),
+						)))
+						.await?;
+
+					// Flush to ensure close frame is sent
+					ws_handle.flush().await?;
+
+					// Keep TCP connection open briefly to allow client to process close
+					tokio::time::sleep(WEBSOCKET_CLOSE_LINGER).await;
+
+					break;
+				} else {
+					let backoff = utils::calculate_backoff(
+						attempts,
+						req_ctx.retry.initial_interval,
+					);
+
+					tracing::debug!(
+						?backoff,
+						"WebSocket attempt {attempts} failed (service unavailable)"
+					);
+
+					// Apply backoff for retryable error
+					tokio::time::sleep(backoff).await;
+				}
+
+				// Retry route resolution
+				match state.resolve_route(req_ctx, true).await {
+					Ok(ResolveRouteOutput::CustomServe(new_handler)) => {
+						handler = new_handler;
+						continue;
+					}
+					Ok(ResolveRouteOutput::Target(_)) => {
+						let err = errors::WebSocketTargetChanged {
+							phase: "custom_serve_websocket_retry".to_owned(),
+							from_target_kind: "custom_serve".to_owned(),
+							to_target_kind: "target".to_owned(),
+						}
+						.build();
+						tracing::warn!(
+							?err,
+							"websocket target changed to target"
+						);
+						ws_handle
+							.send(utils::to_hyper_close(Some(
+								utils::err_to_close_frame(err, req_ctx.ray_id),
+							)))
+							.await?;
+
+						// Flush to ensure close frame is sent
+						ws_handle.flush().await?;
+
+						// Keep TCP connection open briefly to allow client to process close
+						tokio::time::sleep(WEBSOCKET_CLOSE_LINGER).await;
+
+						break;
+					}
+					Err(err) => {
+						tracing::warn!(
+							?err,
+							"closing websocket due to route resolution error"
+						);
+						ws_handle
+							.send(utils::to_hyper_close(Some(
+								utils::err_to_close_frame(err, req_ctx.ray_id),
+							)))
+							.await?;
+
+						// Flush to ensure close frame is sent
+						ws_handle.flush().await?;
+
+						// Keep TCP connection open briefly to allow client to process close
+						tokio::time::sleep(WEBSOCKET_CLOSE_LINGER).await;
+
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	// Release in-flight counter and request ID when task completes
+	state
+		.release_in_flight(req_ctx.client_ip, req_ctx.in_flight_request_id)
+		.await;
+
+	Ok(())
 }
 
 impl Clone for ProxyService {
