@@ -86,28 +86,71 @@ Status as of 2026-08-08. Each done step compiles under
    tokio's `AsyncRead` and `AsyncWrite`, so no adapter is needed.
    `WebSocketStream::from_raw_socket` with `Role::Server` feeds
    `WebSocketHandle::from_stream` directly.
-5. **Not done.** Route into the existing `ProxyService` path. The TCP
-   path reaches a handler at `proxy_service.rs:1684` through
-   `handler.handle_websocket(req_ctx, ws_handle, after_hibernation)`,
-   inside `handle_websocket_upgrade` at line 1029. That function also
-   owns routing, retries, header rewriting, and hibernation.
+5. **Not done.** Route into the existing `ProxyService` path. This is the
+   only substantial piece left, and the seam is exact.
 
-   The clean move is to lift the post-upgrade half of
-   `handle_websocket_upgrade` into a function taking a `WebSocketHandle`
-   and a routing target, then call it from both the TCP and the HTTP/3
-   path. Until that lands, `run_h3_listener` accepts sessions and hands
-   each WebSocket to a caller-supplied closure, and no traffic routes.
-6. **Not done.** Bind the listener inside `run_server`. Use the existing
-   `https.port` over UDP, which is the conventional HTTP/3 pairing, so
-   the config schema needs no new field.
-7. **Not done.** A Godot demo against the pinned engine at
-   `v2026.06.27.1907-multiplayer-fabric`, whose `http3` module already
-   carries `HTTP3Client`, `QUICClient`, `QUICServer`, and
-   `WebTransportPeer`.
+   `handle_websocket_upgrade` spans lines 1029 to about 1893 of
+   `proxy_service.rs`. It performs the hyper upgrade at the top, which a
+   WebTransport stream cannot supply, so the seam has to sit after it.
+
+   The function then branches on `ResolveRouteOutput`. The actor path is the
+   `CustomServe(handler)` arm, whose task spawns at line 1671 and reaches
+   `handler.handle_websocket(req_ctx, ws_handle, after_hibernation)` at 1684.
+   The other arm, spawning at 1083, forwards to an upstream target and is not
+   needed for actors.
+
+   Extract the async block spawned at 1671 into a crate-visible function:
+
+   ```rust
+   pub(crate) async fn serve_custom_websocket(
+       state: Arc<ProxyState>,
+       req_ctx: RequestContext,
+       handler: Box<dyn CustomServeTrait>,
+       ws_handle: WebSocketHandle,
+   ) -> Result<()>
+   ```
+
+   The block currently builds its own handle at line 1678 with
+   `WebSocketHandle::new(client_ws)`. Delete that line and take the handle as
+   the parameter above. Both callers then supply one:
+
+   - The TCP path calls `WebSocketHandle::new(client_ws).await?` first, exactly
+     as it does today.
+   - The HTTP/3 path calls `WebSocketHandle::from_stream(ws_stream)`, which
+     step 1 added.
+
+   Watch the captured variables. The block closes over `state` and a cloned
+   `req_ctx` from lines 1667 and 1668, and the retry, hibernation, and close
+   handling all live inside it. Move the whole block rather than parts of it.
+
+6. **Not done.** Bind the listener inside `run_server`. Add a UDP bind beside
+   the two `TcpListener` binds, reusing `https.port` over UDP, which is the
+   conventional HTTP/3 pairing, so the config schema needs no new field. The
+   `on_websocket` closure then resolves a route and calls
+   `serve_custom_websocket` from step 5.
+
+7. **Not done.** A Godot demo. `container-runner/examples/godot-demo` already
+   holds the actor and a WebSocket child. It needs a WebTransport client, which
+   the pinned engine supplies through `WebTransportPeer`.
+
 8. **Not done.** Measure with
-   `container-runner/examples/e2e-test/load-test.mjs`, which reports
-   `p50`, `p95`, `p99`, and `max`. Compare `p95` against the 15.6 ms
-   tick.
+   `container-runner/examples/e2e-test/load-test.mjs`, which reports `p50`,
+   `p95`, `p99`, and `max`. Compare `p95` against the 15.6 ms tick, from a real
+   client network rather than from inside the datacenter.
+
+## What the internal path costs
+
+Worth knowing before optimising the external leg. The tunnel between Guard and
+an actor is not a socket. `pegboard-gateway` carries traffic over
+`universalpubsub`, publishing to `RunnerReceiverSubject` and subscribing on
+`GatewayReceiverSubject`, and the workspace dependency is `async-nats`.
+
+A round trip crosses the broker four times. Estimated 1 to 3 ms against a
+15.6 ms tick, which is 6 to 19 percent of the budget. The 8.9 us `AF_UNIX`
+figure from `rfd/0096` is measured; the per-hop broker cost is an estimate.
+
+`shared_state.rs` also logs "gateway subscription unsubscribed, in flight
+messages may be lost" on resubscribe, so the internal path is not lossless.
 
 ## What stays untouched
 
