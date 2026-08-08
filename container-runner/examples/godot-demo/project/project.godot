@@ -1,12 +1,12 @@
-; Minimal headless project for the WebSocket echo zone.
+; Headless zone: MCP over HTTP plus a WebSocket echo surface.
 config_version=5
 
 [application]
 
-config/name="godot-ws-zone"
+config/name="godot-mcp-zone"
 run/main_scene=""
 config/features=PackedStringArray("4.7")
 
-[headless]
+[editor_plugins]
 
-enabled=true
+enabled=PackedStringArray("res://addons/vsekai_godot_mcp/plugin.cfg")

@@ -32,11 +32,21 @@ COPY container-runner/examples/godot-demo/entrypoint.sh /usr/local/bin/godot-dem
 # GODOT_BIN, GODOT_PROJECT and DEMO_SCRIPT let an actor override the engine
 # path, the project, and the script without a rebuild. The actor `input` can
 # also override them through its `env` map.
+# The in-editor MCP addon, which also runs headless. Pinned by commit, because
+# the repository publishes no tags.
+ARG MCP_REPO=https://github.com/v-sekai-multiplayer-fabric/vsekai-godot-mcp
+ARG MCP_COMMIT=580bb5fedc7c1bb56eb38b8377f918d9c5ffc998
+ADD ${MCP_REPO}/archive/${MCP_COMMIT}.tar.gz /tmp/mcp.tar.gz
+RUN mkdir -p /opt/zone/addons \
+    && tar -xzf /tmp/mcp.tar.gz -C /tmp \
+    && cp -r /tmp/vsekai-godot-mcp-${MCP_COMMIT}/addons/vsekai_godot_mcp /opt/zone/addons/ \
+    && rm -rf /tmp/mcp.tar.gz /tmp/vsekai-godot-mcp-${MCP_COMMIT}
+
 COPY container-runner/examples/godot-demo/project /opt/zone
 
 ENV GODOT_BIN=godot \
     GODOT_PROJECT=/opt/zone \
-    ZONE_SCRIPT=ws_zone_server.gd
+    ZONE_SCRIPT=zone_main.gd
 
 # The runner is the entrypoint. Everything after `--` is the child command
 # template, which an actor `input.command` may replace.

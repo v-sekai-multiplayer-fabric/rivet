@@ -1,19 +1,19 @@
 #!/bin/sh
-# Glue between container-runner's contract and the Godot WebSocket zone.
+# Glue between container-runner's contract and the Godot MCP zone.
 #
-# The child speaks WebSocket, not WebTransport. Guard terminates WebTransport
-# from the client and carries WebSocket frames over Rivet's tunnel, so the
-# child only needs a plain WebSocket listener on the injected PORT.
+# The child serves two surfaces from one process. MCP over HTTP on PORT, which
+# Rivet's tunnel proxies, and a WebSocket echo zone on PORT + 1 for game
+# traffic.
 #
-# That also means container-runner's default readiness probe works, because a
-# WebSocket listener is TCP.
+# The default TCP readiness probe works, because the MCP listener is TCP on
+# PORT.
 set -eu
 
 : "${PORT:?container-runner did not inject PORT}"
 
-echo "godot-demo: PORT=${PORT} (websocket, tcp)" >&2
+echo "godot-demo: PORT=${PORT} (mcp, http) $((PORT + 1)) (websocket)" >&2
 
 exec "${GODOT_BIN:-godot}" \
 	--headless \
 	--path "${GODOT_PROJECT:-/opt/zone}" \
-	--script "${ZONE_SCRIPT:-ws_zone_server.gd}"
+	--script "${ZONE_SCRIPT:-zone_main.gd}"
