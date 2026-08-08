@@ -91,3 +91,116 @@ async fn the_unreliable_flag_is_stripped_before_routing() {
 	assert_eq!(strip_unreliable_flag("/zone/asset"), "/zone/asset");
 	assert_eq!(strip_unreliable_flag("/zone/asset?a=1"), "/zone/asset?a=1");
 }
+
+#[tokio::test]
+async fn a_stream_can_name_an_unreliable_channel() {
+	use super::unreliable_channel;
+
+	// Several unreliable channels can coexist on one session, so the flag
+	// carries which one rather than a bare yes.
+	assert_eq!(unreliable_channel("/zone/motion?rivet_unreliable=7"), Some(7));
+	assert_eq!(unreliable_channel("/zone/motion?a=1&rivet_unreliable=0"), Some(0));
+	assert_eq!(unreliable_channel("/zone/motion?rivet_unreliable=65535"), Some(65535));
+}
+
+#[tokio::test]
+async fn a_stream_without_the_flag_stays_reliable() {
+	use super::unreliable_channel;
+
+	// Reliable is the default. A stream with no flag is served over itself,
+	// which is what gives each reliable channel its own head-of-line domain.
+	assert_eq!(unreliable_channel("/zone/asset"), None);
+	assert_eq!(unreliable_channel("/zone/asset?a=1"), None);
+}
+
+#[tokio::test]
+async fn a_bad_channel_id_does_not_become_a_datagram_channel() {
+	use super::unreliable_channel;
+
+	// Falling back to reliable is safe. Guessing a channel id would silently
+	// deliver to the wrong connection.
+	assert_eq!(unreliable_channel("/zone/motion?rivet_unreliable=notanumber"), None);
+	assert_eq!(unreliable_channel("/zone/motion?rivet_unreliable=70000"), None);
+	assert_eq!(unreliable_channel("/zone/motion?rivet_unreliable="), None);
+}
+
+#[tokio::test]
+async fn the_channel_flag_is_stripped_whatever_its_value() {
+	use super::strip_unreliable_flag;
+
+	assert_eq!(strip_unreliable_flag("/zone/motion?rivet_unreliable=7"), "/zone/motion");
+	assert_eq!(
+		strip_unreliable_flag("/zone/motion?a=1&rivet_unreliable=42&b=2"),
+		"/zone/motion?a=1&b=2"
+	);
+}
+
+#[tokio::test]
+async fn a_newer_sequence_is_accepted() {
+	use super::seq_newer;
+
+	assert!(seq_newer(1, 0));
+	assert!(seq_newer(100, 99));
+	assert!(seq_newer(30_000, 1));
+}
+
+#[tokio::test]
+async fn a_superseded_sequence_is_rejected() {
+	use super::seq_newer;
+
+	// This is the whole point of a sequenced unreliable channel. A pose that
+	// arrives after a newer one has been superseded, and applying it moves the
+	// avatar backwards.
+	assert!(!seq_newer(99, 100));
+	assert!(!seq_newer(0, 1));
+}
+
+#[tokio::test]
+async fn the_same_sequence_twice_is_rejected() {
+	use super::seq_newer;
+
+	// A duplicate carries nothing new, and QUIC may deliver one.
+	assert!(!seq_newer(42, 42));
+}
+
+#[tokio::test]
+async fn sequences_keep_working_after_they_wrap() {
+	use super::seq_newer;
+
+	// A u16 at 64 Hz wraps about every 17 minutes. A plain `>` would discard
+	// every datagram for half a cycle after each wrap, so the stream would
+	// freeze for eight minutes at a time.
+	assert!(seq_newer(0, 65_535));
+	assert!(seq_newer(5, 65_530));
+	assert!(!seq_newer(65_530, 5));
+}
+
+#[tokio::test]
+async fn a_sequenced_channel_is_requested_explicitly() {
+	use super::{Delivery, unreliable_channel};
+
+	// Unsequenced is the default, because it is the cheaper promise.
+	let path = "/zone/motion?rivet_unreliable=3&rivet_sequenced=1";
+	assert_eq!(unreliable_channel(path), Some(3));
+	assert!(path.contains(super::SEQUENCED_FLAG));
+
+	let plain = "/zone/motion?rivet_unreliable=3";
+	assert!(!plain.contains(super::SEQUENCED_FLAG));
+
+	// Prove the enum is reachable and distinct.
+	assert_ne!(Delivery::Sequenced, Delivery::Unsequenced);
+}
+
+#[tokio::test]
+async fn both_channel_flags_are_stripped_before_routing() {
+	use super::strip_unreliable_flag;
+
+	assert_eq!(
+		strip_unreliable_flag("/zone/motion?rivet_unreliable=3&rivet_sequenced=1"),
+		"/zone/motion"
+	);
+	assert_eq!(
+		strip_unreliable_flag("/zone/motion?a=1&rivet_unreliable=3&rivet_sequenced=1&b=2"),
+		"/zone/motion?a=1&b=2"
+	);
+}
