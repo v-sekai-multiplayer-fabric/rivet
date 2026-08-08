@@ -216,6 +216,7 @@ where
 					stream_req.path = strip_unreliable_flag(&path);
 
 					let handle = if unreliable {
+						tracing::debug!("serving this connection over datagrams");
 						datagram_handle(&session)
 					} else {
 						// `BidiStream` implements tokio's AsyncRead and AsyncWrite,
@@ -322,6 +323,7 @@ fn datagram_handle(
 		match reader.read_datagram().await {
 			Result::Ok(datagram) => {
 				let payload = datagram.into_payload();
+				tracing::debug!(len = payload.len(), "received a datagram");
 				Some((Result::Ok(Message::Binary(payload)), reader))
 			}
 			Err(err) => {

@@ -48,6 +48,12 @@ impl CustomServeTrait for WebSocketHealthService {
 				Message::Text(text) if text == "ping" => {
 					websocket.send(Message::Text("pong".into())).await?;
 				}
+				// A datagram-backed connection has no WebSocket framing, so its
+				// payloads arrive as binary. Answering here lets the health
+				// route verify that transport too.
+				Message::Binary(data) if data.as_ref() == b"ping" => {
+					websocket.send(Message::Binary("pong".into())).await?;
+				}
 				Message::Ping(payload) => {
 					websocket.send(Message::Pong(payload)).await?;
 				}
