@@ -11,7 +11,7 @@ set -euo pipefail
 FDB_APP="${FDB_APP:-mf-rivet-fdb}"
 ENGINE_APP="${ENGINE_APP:-mf-rivet-engine}"
 GODOT_APP="${GODOT_APP:-mf-rivet-godot}"
-REGION="${REGION:-sea}"
+REGION="${REGION:-sjc}"
 ORG="${ORG:-personal}"
 FDB_PORT="${FDB_PORT:-4500}"
 # 1 machine allows `configure single`. Use 3 for `double` redundancy.
@@ -38,12 +38,11 @@ fi
 flyctl ips list --app "${FDB_APP}" 2>/dev/null | grep -q . || true
 
 log "Building the FoundationDB image"
-flyctl deploy self-host/fly/foundationdb \
+(cd self-host/fly/foundationdb && flyctl deploy . \
 	--app "${FDB_APP}" \
-	--config self-host/fly/foundationdb/fly.toml \
 	--regions "${REGION}" \
 	--ha=false \
-	--yes
+	--yes)
 
 log "Ensuring ${FDB_COUNT} FDB machines"
 current="$(flyctl machine list --app "${FDB_APP}" --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
@@ -68,11 +67,20 @@ print(','.join(f'[{a}]:${FDB_PORT}' for a in addrs[:${FDB_COUNT}]))
 echo "coordinators: ${coordinators}"
 
 log "Setting FDB_COORDINATORS"
-flyctl secrets set --app "${FDB_APP}" "FDB_COORDINATORS=${coordinators}" --stage
-flyctl deploy self-host/fly/foundationdb \
+# Each machine bootstrapped as its own sole coordinator, because the addresses
+# were not knowable at create time. FDB_FORCE_COORDINATORS makes the entrypoint
+# overwrite those cluster files so the machines form one cluster instead of
+# three. It is cleared immediately after, so later redeploys cannot clobber a
+# live coordinator set.
+flyctl secrets set --app "${FDB_APP}" \
+	"FDB_COORDINATORS=${coordinators}" \
+	"FDB_FORCE_COORDINATORS=1" \
+	--stage
+(cd self-host/fly/foundationdb && flyctl deploy . \
 	--app "${FDB_APP}" \
-	--config self-host/fly/foundationdb/fly.toml \
-	--yes
+	--yes)
+
+flyctl secrets unset --app "${FDB_APP}" FDB_FORCE_COORDINATORS --stage
 
 log "Configuring the database"
 # The first configure creates the database. It is an error to run it twice, so

@@ -14,20 +14,24 @@ set -euo pipefail
 : "${FDB_CLUSTER_ID:=rivet}"
 : "${FDB_CLASS:=unset}"
 
-if [ -z "${FDB_COORDINATORS:-}" ]; then
-	echo "FDB_COORDINATORS is required, e.g. [fdaa:0:1::3]:4500,[fdaa:0:1::4]:4500" >&2
-	exit 1
-fi
-
 # Fly exposes the machine's own 6PN address here.
 public_ip="${FLY_PRIVATE_IP:?FLY_PRIVATE_IP not set}"
 public_address="[${public_ip}]:${FDB_PORT}"
+
+# Coordinator addresses are not knowable before the machines exist, so the first
+# machine bootstraps as its own sole coordinator. deploy.sh reads the addresses
+# back and sets FDB_COORDINATORS for real once every machine is up.
+: "${FDB_COORDINATORS:=${public_address}}"
 
 mkdir -p "${FDB_DATA_DIR}" "${FDB_LOG_DIR}" "$(dirname "${FDB_CLUSTER_FILE}")"
 
 # fdbserver rewrites the cluster file when coordinators change, so only seed it
 # when it is missing. Otherwise a redeploy would clobber a live coordinator set.
-if [ ! -s "${FDB_CLUSTER_FILE}" ]; then
+#
+# FDB_FORCE_COORDINATORS=1 overrides that. It is needed exactly once, to join
+# machines that each bootstrapped as their own sole coordinator into one
+# cluster, and must be unset afterwards.
+if [ ! -s "${FDB_CLUSTER_FILE}" ] || [ "${FDB_FORCE_COORDINATORS:-0}" = "1" ]; then
 	echo "${FDB_CLUSTER_DESCRIPTION}:${FDB_CLUSTER_ID}@${FDB_COORDINATORS}" > "${FDB_CLUSTER_FILE}"
 fi
 

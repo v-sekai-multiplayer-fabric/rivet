@@ -9,7 +9,7 @@
 # because it carries the admin token.
 
 app = "mf-rivet-godot"
-primary_region = "sea"
+primary_region = "sjc"
 
 [env]
   GODOT_PROJECT = "/opt/zone"

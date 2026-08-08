@@ -42,8 +42,9 @@ Coordinator addresses are not knowable until the FDB machines exist, so this
 runs in phases:
 
 1. Create and deploy the FDB app, then clone machines up to `FDB_COUNT`.
-2. Read each machine's 6PN address back and set `FDB_COORDINATORS`.
-3. Redeploy, then `configure new <redundancy> <storage>` and set coordinators.
+2. Read each machine's 6PN address back and set `FDB_COORDINATORS`, plus
+   `FDB_FORCE_COORDINATORS=1` for one deploy.
+3. Redeploy, clear the force flag, then `configure new <redundancy> <storage>`.
 4. Deploy the engine with `RIVET__FOUNDATIONDB__ADDRESSES` pointed at them.
 5. Deploy the Godot zone with `RIVET_ENDPOINT` pointed at the engine.
 6. Register the zone as a serverless runner.
@@ -75,6 +76,22 @@ a recreate gives a new address and the cluster file goes stale. Recover with:
 flyctl ssh console --app mf-rivet-fdb --command \
   "fdbcli -C /var/fdb/fdb.cluster --exec 'coordinators [addr1]:4500 [addr2]:4500 [addr3]:4500'"
 ```
+
+**New machines bootstrap alone.** A machine created before `FDB_COORDINATORS`
+is known writes a cluster file naming only itself, so three fresh machines are
+three separate one-node clusters rather than one. `FDB_FORCE_COORDINATORS=1`
+makes the entrypoint overwrite that file, and `deploy.sh` sets it for exactly
+one deploy then clears it. Verify with:
+
+```sh
+flyctl ssh console --app mf-rivet-fdb --command "cat /var/fdb/fdb.cluster"
+```
+
+All machines must print the same line.
+
+**`shared-cpu-2x` is below what FDB wants.** The cluster reports a warning that
+it has 1.8 GB per process against a 4 GB recommendation. It runs, but size the
+VMs up before putting real load on it.
 
 **Do not let FDB machines autostop.** A suspended coordinator takes the cluster
 down. `fly.toml` keeps them running; do not add `auto_stop_machines`.

@@ -8,8 +8,9 @@ implementation in this tree. This RFD adds an FDB backend to UniversalDB and
 describes what it takes to run the resulting stack on Fly.io alongside a
 headless Godot zone.
 
-Status: implemented behind a Cargo feature. The driver is verified against a
-real FDB 7.3.76 cluster. The Fly topology is specified and scripted here; the
+Status: implemented behind a Cargo feature and deployed. The driver is verified
+against a real FDB 7.3.76 cluster, and a three-machine `double`-redundancy
+cluster is running on Fly in `sjc` with a fault tolerance of one machine. The
 open risks are called out under [Operational risks](#operational-risks).
 
 ## Motivation
@@ -149,10 +150,19 @@ letting Fly recreate.
 coordinator set changes. The entrypoint seeds it only when absent, so a redeploy
 cannot clobber a live coordinator set with a stale env var.
 
-**Bootstrap is inherently two-phase.** Coordinator addresses are not knowable
-until the machines exist, so `deploy.sh` creates machines, reads their addresses
-back from `flyctl machine list --json`, sets `FDB_COORDINATORS`, redeploys, and
-only then runs `configure new`.
+**Bootstrap is inherently two-phase, and the naive version silently splits the
+cluster.** Coordinator addresses are not knowable until the machines exist, so a
+machine created before `FDB_COORDINATORS` is set writes a cluster file naming
+only itself. Three fresh machines therefore come up as three independent
+one-node clusters, each reporting `FDBD joined cluster`, which looks healthy.
+This was observed during the first deployment.
+
+The entrypoint's normal rule is to seed the cluster file only when absent,
+because `fdbserver` rewrites it whenever the coordinator set changes and a
+redeploy must not clobber a live set. `FDB_FORCE_COORDINATORS=1` overrides that
+for exactly one deploy, which is what merges the split clusters.
+`deploy.sh` sets it, redeploys, clears it, and only then runs `configure new`.
+Verify by diffing `/var/fdb/fdb.cluster` across machines before configuring.
 
 **Machines must not autostop.** A suspended coordinator takes the cluster down.
 The FDB app runs with autostop disabled and `min_machines_running` at the
@@ -211,6 +221,9 @@ These are known and unresolved.
    ways this RFD has not measured under load.
 5. **Shared-host redundancy.** As above, `double` on three same-region machines
    may not survive a single host failure.
+6. **The VMs are undersized.** `shared-cpu-2x` with 2 GB gives FDB 1.8 GB per
+   process against its 4 GB recommendation, and the cluster says so in `status`.
+   It runs, but this is not a load-bearing configuration.
 
 ## Testing
 

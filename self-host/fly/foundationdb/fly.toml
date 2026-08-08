@@ -7,7 +7,7 @@
 # bearing. Scale by cloning machines, never by letting Fly recreate them.
 
 app = "mf-rivet-fdb"
-primary_region = "sea"
+primary_region = "sjc"
 
 [build]
   dockerfile = "Dockerfile"
@@ -24,6 +24,7 @@ primary_region = "sea"
 [mounts]
   source = "fdb_data"
   destination = "/var/fdb"
+  initial_size = "10gb"
 
 # FDB reacts badly to being stopped underneath a transaction, and a suspended
 # coordinator takes the cluster down, so these machines always stay running.
