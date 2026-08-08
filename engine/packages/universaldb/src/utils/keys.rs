@@ -158,4 +158,9 @@ define_keys! {
 	(130, GENERATION, "generation"),
 	(131, ENVOY_HASH_IDX, "envoy_hash_idx"),
 	(132, VIRTUAL_NODES, "virtual_nodes"),
+	(133, GUARD, "guard"),
+	(134, TLS, "tls"),
+	(135, ACME, "acme"),
+	(136, CHAIN, "chain"),
+	(137, ACCOUNT, "account"),
 }
