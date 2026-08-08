@@ -1,8 +1,13 @@
-# QUIC-based WebSockets in Guard
+# WebTransport in Guard
 
-Fork goal: carry Guard's client-facing WebSocket traffic over QUIC instead
-of TCP, so that head-of-line blocking is per stream rather than per
-connection.
+Fork goal: give Guard a WebTransport surface, so a client reaches an actor
+over QUIC instead of TCP. Head-of-line blocking then applies per stream
+rather than per connection.
+
+The transport is WebTransport, per `rfd/0023`. This is not WebSocket over
+HTTP/3, which RFC 9220 defines and no browser exposes to JavaScript. A
+WebTransport bidirectional stream carries WebSocket framing, so Guard's
+internals keep their shape, and QUIC sits underneath.
 
 Upstream has no work to rebase onto. As of 2026-08-08 the upstream
 repository has no open PR or issue for WebTransport, QUIC, or HTTP/3, no
@@ -11,6 +16,16 @@ entry in any workspace `Cargo.toml`. Every `webtransport` path in the tree
 belongs to Unity's vendored `SimpleWebTransport`, which is a WebSocket
 library. A branch dated 2025-05-30 reads
 `chore(cluster): remove tcp & udp ports on gg`.
+
+## Why WebTransport, not WebSocket over HTTP/3
+
+`zone-client-godot` is a web and WASM build. A browser cannot open
+WebSocket over HTTP/3 from JavaScript, and it can open a WebTransport
+session. RFC 9220 would therefore exclude the web client.
+
+WebTransport also carries datagrams as well as streams, so the pose stream
+has a path later without a second transport change. `rfd/0023` chose it
+for that reason.
 
 ## Why this is smaller than a datagram tunnel
 
