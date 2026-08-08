@@ -1,0 +1,12 @@
+; Minimal headless project for the WebSocket echo zone.
+config_version=5
+
+[application]
+
+config/name="godot-ws-zone"
+run/main_scene=""
+config/features=PackedStringArray("4.7")
+
+[headless]
+
+enabled=true

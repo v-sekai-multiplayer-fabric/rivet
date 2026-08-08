@@ -32,14 +32,15 @@ COPY container-runner/examples/godot-demo/entrypoint.sh /usr/local/bin/godot-dem
 # GODOT_BIN, GODOT_PROJECT and DEMO_SCRIPT let an actor override the engine
 # path, the project, and the script without a rebuild. The actor `input` can
 # also override them through its `env` map.
+COPY container-runner/examples/godot-demo/project /opt/zone
+
 ENV GODOT_BIN=godot \
     GODOT_PROJECT=/opt/zone \
-    DEMO_SCRIPT=modules/http3/demo/wt_server_demo.gd
+    ZONE_SCRIPT=ws_zone_server.gd
 
 # The runner is the entrypoint. Everything after `--` is the child command
 # template, which an actor `input.command` may replace.
-# --readiness-beacon replaces the TCP connect probe, because the child listens
-# on UDP alone. The marker is the demo's own ready line.
-ENTRYPOINT ["/usr/local/bin/rivet-container-runner", \
-	"--readiness-beacon", "\"event\": \"ready\"", \
-	"--", "/usr/local/bin/godot-demo-entrypoint"]
+# The default TCP readiness probe works, because the child's WebSocket
+# listener is TCP. --readiness-beacon exists for a UDP-only child and is not
+# needed here.
+ENTRYPOINT ["/usr/local/bin/rivet-container-runner", "--", "/usr/local/bin/godot-demo-entrypoint"]
