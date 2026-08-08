@@ -241,6 +241,21 @@ members = [
     version = "0.1.10"
     features = [ "full" ]
 
+    [workspace.dependencies.quinn]
+    version = "0.11.11"
+    default-features = false
+    features = [ "runtime-tokio", "rustls-ring", "log" ]
+
+    [workspace.dependencies.h3]
+    version = "0.0.8"
+
+    [workspace.dependencies.h3-quinn]
+    version = "0.0.10"
+    features = [ "datagram" ]
+
+    [workspace.dependencies.h3-webtransport]
+    version = "0.1.2"
+
     [workspace.dependencies.rustls]
     version = "0.23.25"
     default-features = false

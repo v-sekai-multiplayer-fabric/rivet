@@ -1,6 +1,7 @@
 pub mod cert_resolver;
 pub mod custom_serve;
 pub mod errors;
+pub mod h3_server;
 pub mod metrics;
 pub mod proxy_service;
 pub mod request_context;
@@ -13,6 +14,7 @@ pub mod utils;
 pub mod websocket_handle;
 
 pub use cert_resolver::CertResolverFn;
+pub use h3_server::{ALPN_H3, quic_server_config, run_h3_listener};
 pub use custom_serve::CustomServeTrait;
 pub use proxy_service::{ProxyService, ProxyState};
 pub use response_body::ResponseBody;

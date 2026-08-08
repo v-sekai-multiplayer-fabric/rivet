@@ -18,7 +18,11 @@ http.workspace = true
 # TODO: Make this use workspace version
 hyper = { version = "1.6.0", features = ["full", "http1", "http2"] }
 hyper-rustls.workspace = true
+h3-quinn.workspace = true
+h3-webtransport.workspace = true
+h3.workspace = true
 hyper-tungstenite.workspace = true
+quinn.workspace = true
 hyper-util = { workspace = true, features = ["full"] }
 indoc.workspace = true
 lazy_static.workspace = true
