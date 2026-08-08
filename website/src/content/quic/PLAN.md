@@ -51,25 +51,48 @@ message, which is noise against a network hop.
 
 ## Steps
 
-1. `websocket_handle.rs`: change the two aliases to boxed trait objects.
-   Add a `from_stream` constructor beside `new`, so any
-   `WebSocketStream<S>` can back a handle. No call-site changes.
-2. Workspace and `guard-core/Cargo.toml`: add `quinn`, `h3`, `h3-quinn`,
-   and `h3-webtransport`. Match the workspace `rustls` version, because
-   `quinn` and `tokio-rustls` must agree.
-3. `server.rs`: add an HTTP/3 listener beside the existing HTTP and HTTPS
-   `TcpListener` binds in `run_server`. Bind UDP, build the rustls config
-   from the existing `create_tls_config(resolver_fn)`, and set ALPN to
-   `h3`.
-4. Accept a WebTransport session, take its bidirectional streams, and
-   wrap each in an adapter that implements `AsyncRead` and `AsyncWrite`.
-   Feed that to `WebSocketStream::from_raw_socket` with `Role::Server`,
-   then `WebSocketHandle::from_stream`.
-5. Route into the existing `ProxyService` path, so routing, caching, and
-   metrics stay unchanged.
-6. Measure with `container-runner/examples/e2e-test/load-test.mjs`, which
-   reports `p50`, `p95`, `p99`, and `max`. Compare `p95` against the
-   15.6 ms tick.
+Status as of 2026-08-08. Each done step compiles under
+`cargo check -p rivet-guard-core`.
+
+1. **Done.** `websocket_handle.rs` erases the transport. The two aliases
+   are boxed trait objects, and `from_stream` accepts any
+   `WebSocketStream<S>`. The public API is unchanged, and
+   `rivet-guard`, `pegboard-runner`, `pegboard-gateway`,
+   `pegboard-gateway2`, and `rivet-envoy-client` all still check.
+2. **Done.** Workspace carries `quinn` 0.11.11 with `runtime-tokio` and
+   `rustls-ring`, `h3` 0.0.8, `h3-quinn` 0.0.10 with its `datagram`
+   feature, and `h3-webtransport` 0.1.2. The `datagram` feature is
+   required, because `WebTransportSession::accept` needs
+   `DatagramConnectionExt`.
+3. **Done.** `h3_server.rs` binds a QUIC endpoint, sets ALPN to `h3`, and
+   builds the QUIC config from any rustls `ServerConfig`, so Guard's
+   certificate resolver carries over unchanged.
+4. **Done.** A WebTransport session's `BidiStream` already implements
+   tokio's `AsyncRead` and `AsyncWrite`, so no adapter is needed.
+   `WebSocketStream::from_raw_socket` with `Role::Server` feeds
+   `WebSocketHandle::from_stream` directly.
+5. **Not done.** Route into the existing `ProxyService` path. The TCP
+   path reaches a handler at `proxy_service.rs:1684` through
+   `handler.handle_websocket(req_ctx, ws_handle, after_hibernation)`,
+   inside `handle_websocket_upgrade` at line 1029. That function also
+   owns routing, retries, header rewriting, and hibernation.
+
+   The clean move is to lift the post-upgrade half of
+   `handle_websocket_upgrade` into a function taking a `WebSocketHandle`
+   and a routing target, then call it from both the TCP and the HTTP/3
+   path. Until that lands, `run_h3_listener` accepts sessions and hands
+   each WebSocket to a caller-supplied closure, and no traffic routes.
+6. **Not done.** Bind the listener inside `run_server`. Use the existing
+   `https.port` over UDP, which is the conventional HTTP/3 pairing, so
+   the config schema needs no new field.
+7. **Not done.** A Godot demo against the pinned engine at
+   `v2026.06.27.1907-multiplayer-fabric`, whose `http3` module already
+   carries `HTTP3Client`, `QUICClient`, `QUICServer`, and
+   `WebTransportPeer`.
+8. **Not done.** Measure with
+   `container-runner/examples/e2e-test/load-test.mjs`, which reports
+   `p50`, `p95`, `p99`, and `max`. Compare `p95` against the 15.6 ms
+   tick.
 
 ## What stays untouched
 
