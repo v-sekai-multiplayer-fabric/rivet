@@ -125,7 +125,7 @@ impl Actor for GameServer {
 			"actor starting on this container instance"
 		);
 
-		let child = match ChildProcess::spawn(spec, cfg.readiness_timeout).await {
+		let child = match ChildProcess::spawn(spec, cfg.readiness_timeout, cfg.readiness.clone()).await {
 			Ok(child) => Arc::new(child),
 			Err(err) => {
 				release_child_port(child_port).await;

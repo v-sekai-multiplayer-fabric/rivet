@@ -43,8 +43,24 @@ pub struct RunnerConfig {
 	pub default_child_port: u16,
 	/// SIGTERM→SIGKILL grace period on stop.
 	pub stop_grace: Duration,
-	/// How long to wait for the child's port to open before failing the start.
+	/// How long to wait for the child to become ready before failing the start.
 	pub readiness_timeout: Duration,
+	/// How the runner decides the child is ready.
+	pub readiness: Readiness,
+}
+
+/// How the runner decides a child is ready to receive traffic.
+///
+/// A TCP connect is the default, and it cannot work for a child that listens
+/// only on UDP. A WebTransport server is exactly that case, because QUIC is
+/// UDP. So such a child announces itself on stdout instead, and the runner
+/// waits for a line containing a caller-supplied marker.
+#[derive(Clone, Debug)]
+pub enum Readiness {
+	/// Connect to the child's TCP port until it accepts.
+	TcpPort,
+	/// Wait for a stdout line containing this substring.
+	StdoutBeacon(String),
 }
 
 // The `Actor` trait constructs actors without user parameters, so the runner
@@ -251,6 +267,12 @@ struct Args {
 	#[arg(long, env = "RIVET_READINESS_TIMEOUT_SECS", default_value_t = 30)]
 	readiness_timeout_secs: u64,
 
+	/// Treat a stdout line containing this substring as the readiness signal,
+	/// instead of connecting to the child's TCP port. Required for a child that
+	/// listens only on UDP, such as a WebTransport server.
+	#[arg(long, env = "RIVET_READINESS_BEACON")]
+	readiness_beacon: Option<String>,
+
 	/// The child command to run, after `--`. e.g. `-- node /app/server.mjs`.
 	#[arg(last = true, required = true)]
 	command: Vec<String>,
@@ -299,6 +321,10 @@ async fn async_main() -> Result<()> {
 			default_child_port: args.child_port,
 			stop_grace,
 			readiness_timeout: Duration::from_secs(args.readiness_timeout_secs),
+			readiness: match args.readiness_beacon.clone() {
+				Some(marker) => Readiness::StdoutBeacon(marker),
+				None => Readiness::TcpPort,
+			},
 		}))
 		.map_err(|_| anyhow::anyhow!("runner config already set"))?;
 

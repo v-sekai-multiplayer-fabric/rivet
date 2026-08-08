@@ -1,22 +1,24 @@
 #!/bin/sh
 # Glue between container-runner's contract and the engine's WebTransport demo.
 #
-# container-runner injects PORT and then probes it with a TCP connect before it
-# reports the actor ready. The demo listens on two sockets: WebTransport over
-# UDP on ZONE_PORT, and a plain HTTP page over TCP on ZONE_PORT + 1.
+# WebTransport is QUIC, so the child listens on UDP. container-runner's default
+# readiness probe is a TCP connect, which a UDP-only child can never satisfy.
+# So this demo runs the runner with --readiness-beacon, and the runner waits for
+# the demo's own stdout line instead.
 #
-# So ZONE_PORT is set one below PORT. The HTTP page then lands exactly on PORT,
-# readiness passes, and the tunnel proxies the page. WebTransport stays on
-# PORT - 1 over UDP, reached directly rather than through the tunnel, because
-# container-runner proxies TCP only.
+# wt_server_demo.gd prints that line as JSON:
+#   {"event": "ready", "port": ..., "cert_hash": ...}
+#
+# ZONE_PORT therefore equals PORT, and WebTransport owns it. Nothing serves
+# HTTP/1 on the actor's port.
 set -eu
 
 : "${PORT:?container-runner did not inject PORT}"
 
-ZONE_PORT=$((PORT - 1))
+ZONE_PORT="${PORT}"
 export ZONE_PORT
 
-echo "godot-demo: PORT=${PORT} (http, tcp) ZONE_PORT=${ZONE_PORT} (webtransport, udp)" >&2
+echo "godot-demo: ZONE_PORT=${ZONE_PORT} (webtransport, udp)" >&2
 
 exec "${GODOT_BIN:-godot}" \
 	--headless \

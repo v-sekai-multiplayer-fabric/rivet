@@ -44,6 +44,10 @@ pub struct ChildProcess {
 	pid: u32,
 	/// `None` while running, `Some(exit)` once the child has exited.
 	exited_rx: watch::Receiver<Option<ChildExit>>,
+	/// How this child announces readiness.
+	readiness: crate::Readiness,
+	/// True once the stdout beacon line appeared. Unused in TCP mode.
+	beacon_rx: watch::Receiver<bool>,
 }
 
 /// Everything needed to launch the child.
@@ -60,7 +64,11 @@ impl ChildProcess {
 	/// Spawn the child with piped stdout+stderr, start log-pump tasks that re-emit
 	/// each line to the runner's stdout prefixed with `[actor_id=<id> key=<key>]`, start
 	/// a reaper task, and wait until the child's TCP port accepts connections.
-	pub async fn spawn(spec: SpawnSpec, readiness_timeout: Duration) -> Result<Self> {
+	pub async fn spawn(
+		spec: SpawnSpec,
+		readiness_timeout: Duration,
+		readiness: crate::Readiness,
+	) -> Result<Self> {
 		let SpawnSpec {
 			program,
 			args,
@@ -78,9 +86,12 @@ impl ChildProcess {
 		// reports the NEW child "ready" even though the new child failed to bind
 		// (`Address already in use`) and is dead. Refuse the start with a clear diagnostic
 		// instead — this container hosts exactly one game server on a fixed port.
-		if TcpStream::connect((Ipv4Addr::LOCALHOST, child_port))
-			.await
-			.is_ok()
+		// A UDP-only child never holds this TCP port, so the guard applies to the
+		// TCP readiness mode alone.
+		if matches!(readiness, crate::Readiness::TcpPort)
+			&& TcpStream::connect((Ipv4Addr::LOCALHOST, child_port))
+				.await
+				.is_ok()
 		{
 			anyhow::bail!(
 				"child port {child_port} is already in use before spawning `{program}`: a \
@@ -105,9 +116,23 @@ impl ChildProcess {
 			.id()
 			.context("child process has no pid immediately after spawn")?;
 
+		// A beacon marker makes the stdout pump watch for the readiness line. The
+		// pump owns stdout, so the match happens there rather than in a second
+		// reader.
+		let beacon_marker = match &readiness {
+			crate::Readiness::StdoutBeacon(marker) => Some(marker.clone()),
+			crate::Readiness::TcpPort => None,
+		};
+		let (beacon_tx, beacon_rx) = watch::channel(false);
+
 		// Pump stdout + stderr to the runner's stdout with the actor prefix.
 		if let Some(stdout) = child.stdout.take() {
-			spawn_log_pump(stdout, prefix.clone());
+			spawn_log_pump_with_beacon(
+				stdout,
+				prefix.clone(),
+				beacon_marker,
+				Some(beacon_tx),
+			);
 		}
 		if let Some(stderr) = child.stderr.take() {
 			spawn_log_pump(stderr, prefix.clone());
@@ -141,6 +166,8 @@ impl ChildProcess {
 			child_port,
 			pid,
 			exited_rx,
+			readiness,
+			beacon_rx,
 		};
 
 		// If the child crashes before opening its port, or never opens it, make sure we
@@ -153,8 +180,12 @@ impl ChildProcess {
 		Ok(this)
 	}
 
-	/// Poll the child's local TCP port until it accepts a connection or times out.
-	/// If the child exits before becoming ready, fail fast.
+	/// Wait until the child is ready, or time out.
+	///
+	/// In TCP mode this polls the child's local port until it accepts. In beacon
+	/// mode it waits for the marker line on stdout, which is the only option for
+	/// a child that listens on UDP alone. Either way, a child that exits first
+	/// fails fast.
 	async fn wait_until_ready(&self, timeout: Duration) -> Result<()> {
 		let deadline = Instant::now() + timeout;
 		let addr = (Ipv4Addr::LOCALHOST, self.child_port);
@@ -163,19 +194,37 @@ impl ChildProcess {
 			if let Some(exit) = self.exited_rx.borrow().clone() {
 				anyhow::bail!("child exited before becoming ready (status: {exit})");
 			}
-			if TcpStream::connect(addr).await.is_ok() {
-				println!(
-					"{prefix} runner: child is ready (port {} open)",
-					self.child_port
-				);
-				return Ok(());
+			match &self.readiness {
+				crate::Readiness::TcpPort => {
+					if TcpStream::connect(addr).await.is_ok() {
+						println!(
+							"{prefix} runner: child is ready (port {} open)",
+							self.child_port
+						);
+						return Ok(());
+					}
+				}
+				crate::Readiness::StdoutBeacon(marker) => {
+					if *self.beacon_rx.borrow() {
+						println!(
+							"{prefix} runner: child is ready (stdout beacon {marker:?} seen)"
+						);
+						return Ok(());
+					}
+				}
 			}
 			if Instant::now() >= deadline {
-				anyhow::bail!(
-					"child did not open port {} within {:?}",
-					self.child_port,
-					timeout
-				);
+				match &self.readiness {
+					crate::Readiness::TcpPort => anyhow::bail!(
+						"child did not open port {} within {:?}",
+						self.child_port,
+						timeout
+					),
+					crate::Readiness::StdoutBeacon(marker) => anyhow::bail!(
+						"child did not print a stdout line containing {marker:?} within {:?}",
+						timeout
+					),
+				}
 			}
 			sleep(Duration::from_millis(150)).await;
 		}
@@ -234,11 +283,34 @@ fn spawn_log_pump<R>(reader: R, prefix: String)
 where
 	R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
+	spawn_log_pump_with_beacon(reader, prefix, None, None);
+}
+
+/// Pump a child stream to stdout, and optionally signal when a line contains
+/// `marker`.
+///
+/// The pump owns the stream, so the readiness match happens here rather than in
+/// a second reader competing for the same file descriptor.
+fn spawn_log_pump_with_beacon<R>(
+	reader: R,
+	prefix: String,
+	marker: Option<String>,
+	beacon_tx: Option<watch::Sender<bool>>,
+) where
+	R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
 	tokio::spawn(async move {
 		let mut lines = BufReader::new(reader).lines();
 		loop {
 			match lines.next_line().await {
-				Ok(Some(line)) => println!("{prefix} {line}"),
+				Ok(Some(line)) => {
+					if let (Some(marker), Some(tx)) = (marker.as_deref(), beacon_tx.as_ref()) {
+						if line.contains(marker) {
+							let _ = tx.send(true);
+						}
+					}
+					println!("{prefix} {line}")
+				}
 				Ok(None) => break,
 				Err(e) => {
 					eprintln!("{prefix} runner: error reading child log stream: {e}");

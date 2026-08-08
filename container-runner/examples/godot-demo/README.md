@@ -21,24 +21,31 @@ The 13-day validity is deliberate. A browser accepts
 `serverCertificateHashes` only for a short-lived certificate, so this avoids
 any certificate authority.
 
-## Why two ports
+## No HTTP/1 anywhere
 
-`container-runner` injects `PORT` and then probes it with a TCP connect before
-it reports the actor ready. Its proxy is TCP only: `src/proxy.rs` forwards to
-`http://127.0.0.1:{child_port}` and the `ws://` form, and `src/child.rs` checks
-readiness with `TcpStream::connect`.
+WebTransport is QUIC, so the child listens on UDP only. Nothing on this actor
+serves HTTP/1.
 
-WebTransport is QUIC, which is UDP. So the two do not overlap.
+That breaks `container-runner`'s default readiness probe, which is a TCP
+connect in `src/child.rs`. A UDP-only child never satisfies it.
 
-`entrypoint.sh` sets `ZONE_PORT` to `PORT - 1`. The demo's HTTP page then lands
-exactly on `PORT`, readiness passes, and the tunnel proxies the page.
-WebTransport stays on `PORT - 1` over UDP, reached directly rather than through
-the tunnel.
+So this branch adds a second readiness mode. `--readiness-beacon <substring>`
+makes the runner wait for a stdout line containing that substring, and the
+stdout pump matches it while it forwards the line. The demo already prints a
+suitable line:
 
-| Socket       | Port       | Protocol | Reached by            |
-| ------------ | ---------- | -------- | --------------------- |
-| Test page    | `PORT`     | HTTP/TCP | Rivet's tunnel        |
-| WebTransport | `PORT - 1` | QUIC/UDP | The client, directly  |
+```json
+{"event": "ready", "port": 7770, "cert_hash": "..."}
+```
+
+`ZONE_PORT` therefore equals `PORT`, and WebTransport owns it.
+
+| Socket       | Port   | Protocol | Readiness signal   |
+| ------------ | ------ | -------- | ------------------ |
+| WebTransport | `PORT` | QUIC/UDP | The stdout beacon  |
+
+The demo's own HTTP test page still binds `ZONE_PORT + 1`. It is incidental
+here, it carries no traffic for the actor, and nothing depends on it.
 
 ## Build
 
@@ -72,8 +79,8 @@ container's network namespace. Reaching it from elsewhere needs the host
 address instead, which is a change in the engine repository rather than here.
 
 **The UDP port is not routed by Rivet.** A client needs the host address and
-`PORT - 1`. Something must publish that pair, which is a zone directory. This
-demo does not supply one.
+`PORT`. Something must publish that pair together with `cert_hash` from the
+beacon, which is a zone directory. This demo does not supply one.
 
 ## What this does not demonstrate
 

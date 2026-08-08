@@ -38,4 +38,8 @@ ENV GODOT_BIN=godot \
 
 # The runner is the entrypoint. Everything after `--` is the child command
 # template, which an actor `input.command` may replace.
-ENTRYPOINT ["/usr/local/bin/rivet-container-runner", "--", "/usr/local/bin/godot-demo-entrypoint"]
+# --readiness-beacon replaces the TCP connect probe, because the child listens
+# on UDP alone. The marker is the demo's own ready line.
+ENTRYPOINT ["/usr/local/bin/rivet-container-runner", \
+	"--readiness-beacon", "\"event\": \"ready\"", \
+	"--", "/usr/local/bin/godot-demo-entrypoint"]
