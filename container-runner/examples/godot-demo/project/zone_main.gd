@@ -15,7 +15,8 @@ extends SceneTree
 ## Usage:
 ##   godot --headless --path <project> --script zone_main.gd
 
-const MCPCommandsLib = preload("res://addons/vsekai_godot_mcp/mcp_commands.gd")
+const MCPCommandsLib = preload("res://zone_commands.gd")
+const ZoneProtocolLib = preload("res://zone_protocol.gd")
 const MCPHttpServerLib = preload("res://addons/vsekai_godot_mcp/mcp_http_server.gd")
 
 var mcp_port: int = int(OS.get_environment("PORT")) if OS.get_environment("PORT") != "" else 7770
@@ -29,6 +30,10 @@ var _peers: Array[WebSocketPeer] = []
 var _pending: Array[StreamPeerTCP] = []
 
 func _init() -> void:
+	# Swap in the extended protocol so the asset tools appear in tools/list, and
+	# the extended commands so they dispatch. Both subclass the addon rather
+	# than patching it, which is pinned by commit.
+	_http.protocol = ZoneProtocolLib.new()
 	_http.protocol.commands = _cmds
 	if _http.start(mcp_port, "127.0.0.1") != OK:
 		printerr("MCP HTTP listen failed on :%d" % mcp_port)
