@@ -31,6 +31,7 @@ use tokio::io::AsyncReadExt;
 use tokio_tungstenite::WebSocketStream;
 
 use crate::datagram_transport::{SendOutcome, UnbufferedSink, resolve_outcome};
+use crate::roq::{self, RtpHeader, SequenceTracker};
 use crate::websocket_handle::{BoxedWsStream, WebSocketHandle, WebSocketSender};
 
 /// ALPN identifier for HTTP/3. A QUIC client must offer this to reach the
@@ -60,11 +61,10 @@ pub enum Delivery {
 	Sequenced,
 }
 
-/// Bytes before the payload: a `u16` channel, then a `u64` sequence.
+/// Dynamic RTP payload type for a channel carrying opaque application bytes.
 ///
-/// Ten bytes against a datagram of roughly 1200, and a ShaderMotion humanoid
-/// frame is about 260, so a frame still travels in one datagram.
-const DATAGRAM_HEADER_LEN: usize = 10;
+/// 96 is the first value RFC 3551 leaves to dynamic assignment.
+const RTP_PAYLOAD_TYPE: u8 = 96;
 
 /// How many datagrams may queue for one channel before the router drops them.
 ///
@@ -389,19 +389,8 @@ pub struct DatagramRouter {
 struct ChannelSink {
 	tx: tokio::sync::mpsc::Sender<Bytes>,
 	delivery: Delivery,
-	/// Highest sequence delivered so far, for a sequenced channel.
-	last_seq: Arc<std::sync::atomic::AtomicU64>,
-}
-
-/// Is this datagram newer than the newest already delivered?
-///
-/// The sequence is 64 bits, so it does not wrap in any lifetime that matters:
-/// at 64 Hz a `u64` lasts on the order of nine billion years. A narrower
-/// counter would need wrapping-distance comparison, because a plain `>` after
-/// a wrap discards everything for half a cycle. Eight bytes buys the removal
-/// of that whole class of bug.
-fn seq_newer(candidate: u64, last: u64) -> bool {
-	candidate > last
+	/// Rollover-aware view of the RTP sequence, for a sequenced channel.
+	sequence: Arc<tokio::sync::Mutex<SequenceTracker>>,
 }
 
 impl DatagramRouter {
@@ -421,46 +410,49 @@ impl DatagramRouter {
 				match reader.read_datagram().await {
 					Result::Ok(datagram) => {
 						let payload = datagram.into_payload();
-						if payload.len() < DATAGRAM_HEADER_LEN {
-							tracing::debug!(
-								len = payload.len(),
-								"dropping a datagram too short to carry a channel and sequence"
-							);
-							continue;
-						}
 
-						let channel = u16::from_be_bytes([payload[0], payload[1]]);
-						let seq = u64::from_be_bytes(
-							payload[2..DATAGRAM_HEADER_LEN]
-								.try_into()
-								.expect("slice is exactly eight bytes"),
-						);
-						let body = payload.slice(DATAGRAM_HEADER_LEN..);
+						// draft-ietf-avtcore-rtp-over-quic: a flow identifier,
+						// then a complete RTP packet.
+						let (flow_id, rtp) = match roq::parse_datagram(&payload) {
+							Result::Ok(parts) => parts,
+							Err(err) => {
+								tracing::debug!(?err, "dropping an unparseable RoQ datagram");
+								continue;
+							}
+						};
+
+						let header = match roq::parse_rtp(rtp) {
+							Result::Ok(h) => h,
+							Err(err) => {
+								tracing::debug!(?err, flow_id, "dropping a bad RTP packet");
+								continue;
+							}
+						};
+
+						let Result::Ok(channel) = u16::try_from(flow_id) else {
+							tracing::debug!(flow_id, "flow identifier outside the channel range");
+							continue;
+						};
+
+						let body = Bytes::copy_from_slice(&rtp[header.payload_offset..]);
 
 						let found = reader_channels
 							.read_async(&channel, |_, v| {
-								(v.tx.clone(), v.delivery, v.last_seq.clone())
+								(v.tx.clone(), v.delivery, v.sequence.clone())
 							})
 							.await;
 
 						match found {
-							Some((tx, delivery, last_seq)) => {
-								if delivery == Delivery::Sequenced {
-									let last =
-										last_seq.load(std::sync::atomic::Ordering::Relaxed);
-									if !seq_newer(seq, last) {
-										tracing::trace!(
-											channel,
-											seq,
-											last,
-											"dropped a superseded datagram"
-										);
-										continue;
-									}
-									last_seq.store(
-										seq,
-										std::sync::atomic::Ordering::Relaxed,
+							Some((tx, delivery, sequence)) => {
+								if delivery == Delivery::Sequenced
+									&& sequence.lock().await.accept(header.sequence).is_none()
+								{
+									tracing::trace!(
+										channel,
+										seq = header.sequence,
+										"dropped a superseded datagram"
 									);
+									continue;
 								}
 
 								// Drop rather than await. Waiting here would
@@ -505,7 +497,7 @@ impl DatagramRouter {
 				ChannelSink {
 					tx,
 					delivery,
-					last_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+					sequence: Arc::new(tokio::sync::Mutex::new(SequenceTracker::new())),
 				},
 			)
 			.await;
@@ -514,8 +506,9 @@ impl DatagramRouter {
 			.map(|b| Result::Ok(Message::Binary(b)));
 
 		let mut sender = session.datagram_sender();
-		// Starts at 1 so the first datagram is newer than the initial zero.
 		let out_seq = Arc::new(std::sync::atomic::AtomicU64::new(1));
+		// One synchronisation source per channel, as RTP expects.
+		let ssrc = u32::from(channel) | 0x5256_0000;
 		let sink = UnbufferedSink::new(move |msg: Message| {
 			let body = match msg {
 				Message::Binary(data) => data,
@@ -525,15 +518,28 @@ impl DatagramRouter {
 				_ => return Result::Ok(()),
 			};
 
-			// channel, sequence, then the message. The sequence is always
-			// present so both modes share one wire format; an unsequenced
-			// receiver ignores it.
-			let seq = out_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			let seq = out_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u16;
 
-			let mut framed = Vec::with_capacity(DATAGRAM_HEADER_LEN + body.len());
-			framed.extend_from_slice(&channel.to_be_bytes());
-			framed.extend_from_slice(&seq.to_be_bytes());
-			framed.extend_from_slice(&body);
+			let rtp = roq::build_rtp(
+				&RtpHeader {
+					sequence: seq,
+					// Sender wall clock, so a receiver can measure one-way
+					// delay without a separate timing channel.
+					timestamp: rivet_util::timestamp::now() as u32,
+					ssrc,
+					payload_type: RTP_PAYLOAD_TYPE,
+					marker: false,
+					payload_offset: roq::RTP_MIN_HEADER,
+				},
+				&body,
+			);
+
+			let mut framed = Vec::with_capacity(8 + rtp.len());
+			if let Err(err) = roq::encode_varint(u64::from(channel), &mut framed) {
+				tracing::debug!(?err, "could not encode the flow identifier");
+				return Result::Ok(());
+			}
+			framed.extend_from_slice(&rtp);
 
 			let outcome = match sender.send_datagram(Bytes::from(framed)) {
 				Result::Ok(()) => SendOutcome::Sent,

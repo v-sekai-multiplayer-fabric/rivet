@@ -136,50 +136,6 @@ async fn the_channel_flag_is_stripped_whatever_its_value() {
 }
 
 #[tokio::test]
-async fn a_newer_sequence_is_accepted() {
-	use super::seq_newer;
-
-	assert!(seq_newer(1, 0));
-	assert!(seq_newer(100, 99));
-	assert!(seq_newer(u64::MAX, u64::MAX - 1));
-}
-
-#[tokio::test]
-async fn a_superseded_sequence_is_rejected() {
-	use super::seq_newer;
-
-	// This is the whole point of a sequenced unreliable channel. A pose that
-	// arrives after a newer one has been superseded, and applying it moves the
-	// avatar backwards.
-	assert!(!seq_newer(99, 100));
-	assert!(!seq_newer(0, 1));
-}
-
-#[tokio::test]
-async fn the_same_sequence_twice_is_rejected() {
-	use super::seq_newer;
-
-	// A duplicate carries nothing new, and QUIC may deliver one.
-	assert!(!seq_newer(42, 42));
-}
-
-#[tokio::test]
-async fn the_sequence_is_wide_enough_never_to_wrap() {
-	use super::seq_newer;
-
-	// A 64-bit counter at 64 Hz runs for about nine billion years, so wrapping
-	// is not a case to handle. A narrower counter would be: a u16 wraps every
-	// 17 minutes, and a plain `>` would then discard everything for half a
-	// cycle, freezing the stream on a timer long after anything looked wrong.
-	let years = (u64::MAX as f64) / 64.0 / (365.25 * 24.0 * 3600.0);
-	assert!(years > 1.0e9, "a u64 sequence lasts {years:e} years at 64 Hz");
-
-	// A high sequence still compares correctly, which a wrapping scheme would
-	// have had to prove separately.
-	assert!(seq_newer(1_000_000_000_000, 999_999_999_999));
-}
-
-#[tokio::test]
 async fn a_sequenced_channel_is_requested_explicitly() {
 	use super::{Delivery, unreliable_channel};
 
