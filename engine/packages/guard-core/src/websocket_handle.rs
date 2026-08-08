@@ -1,22 +1,31 @@
 use anyhow::*;
-use futures_util::{SinkExt, StreamExt, stream::Peekable};
-use hyper::upgrade::Upgraded;
+use futures_util::{Sink, SinkExt, Stream, StreamExt, stream::Peekable};
 use hyper_tungstenite::HyperWebsocket;
 use hyper_tungstenite::tungstenite::Message;
-use hyper_util::rt::TokioIo;
+use hyper_tungstenite::tungstenite::error::Error as WsError;
 use rivet_perf::{perf_finish, perf_start};
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 use tokio_tungstenite::WebSocketStream;
 
 use crate::metrics;
 
-pub type WebSocketReceiver =
-	Peekable<futures_util::stream::SplitStream<WebSocketStream<TokioIo<Upgraded>>>>;
+/// The receive half, erased over the underlying transport.
+///
+/// A WebSocket runs over a hyper TCP upgrade today and over a WebTransport
+/// bidirectional stream once HTTP/3 lands. Both are `AsyncRead + AsyncWrite`,
+/// so erasing the transport here keeps every `WebSocketHandle` call site
+/// unchanged. The cost is one dynamic dispatch per message, which is noise
+/// against a network hop.
+pub type WebSocketReceiver = Peekable<BoxedWsStream>;
 
-pub type WebSocketSender =
-	futures_util::stream::SplitSink<WebSocketStream<TokioIo<Upgraded>>, Message>;
+/// The send half, erased over the underlying transport. See
+/// [`WebSocketReceiver`].
+pub type WebSocketSender = Box<dyn Sink<Message, Error = WsError> + Send + Unpin>;
+
+pub type BoxedWsStream = Box<dyn Stream<Item = Result<Message, WsError>> + Send + Unpin>;
 
 #[derive(Clone)]
 pub struct WebSocketHandle {
@@ -28,12 +37,25 @@ impl WebSocketHandle {
 	#[tracing::instrument(skip_all)]
 	pub async fn new(websocket: HyperWebsocket) -> Result<Self> {
 		let ws_stream = websocket.await?;
+		Ok(Self::from_stream(ws_stream))
+	}
+
+	/// Build a handle over any already-established WebSocket stream.
+	///
+	/// This is the entry point for transports other than a hyper upgrade,
+	/// such as a WebTransport bidirectional stream carrying WebSocket frames.
+	pub fn from_stream<S>(ws_stream: WebSocketStream<S>) -> Self
+	where
+		S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+	{
 		let (ws_tx, ws_rx) = ws_stream.split();
 
-		Ok(Self {
-			ws_tx: Arc::new(Mutex::new(ws_tx)),
-			ws_rx: Arc::new(Mutex::new(ws_rx.peekable())),
-		})
+		Self {
+			ws_tx: Arc::new(Mutex::new(Box::new(ws_tx) as WebSocketSender)),
+			ws_rx: Arc::new(Mutex::new(
+				(Box::new(ws_rx) as BoxedWsStream).peekable(),
+			)),
+		}
 	}
 
 	#[tracing::instrument(skip_all)]
