@@ -7,7 +7,9 @@ license.workspace = true
 edition.workspace = true
 
 [features]
-default = []
+# This fork exists to add the FoundationDB backend, so a build without it is
+# not a configuration anyone wants. Requires libfdb_c.so at build and run time.
+default = ["foundationdb"]
 foundationdb = ["universaldb/foundationdb"]
 
 [dependencies]
