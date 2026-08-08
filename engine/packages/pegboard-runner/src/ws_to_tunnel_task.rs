@@ -992,7 +992,6 @@ fn tunnel_message_inner_data_len_mk2(kind: &protocol::mk2::ToServerTunnelMessage
 		}
 		ToServerTunnelMessageKind::ToServerResponseChunk(chunk) => chunk.body.len(),
 		ToServerTunnelMessageKind::ToServerWebSocketMessage(msg) => msg.data.len(),
-		ToServerTunnelMessageKind::ToServerWebSocketDatagram(msg) => msg.data.len(),
 		ToServerTunnelMessageKind::ToServerResponseAbort
 		| ToServerTunnelMessageKind::ToServerWebSocketOpen(_)
 		| ToServerTunnelMessageKind::ToServerWebSocketMessageAck(_)

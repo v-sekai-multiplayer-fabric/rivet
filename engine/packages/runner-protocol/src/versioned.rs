@@ -2,24 +2,24 @@ use anyhow::{Ok, Result, bail};
 use vbare::OwnedVersionedData;
 
 use crate::PROTOCOL_MK1_VERSION;
-use crate::generated::{v1, v2, v3, v4, v5, v6, v8};
+use crate::generated::{v1, v2, v3, v4, v5, v6, v7};
 use crate::uuid_compat::{decode_bytes_from_uuid, encode_bytes_to_uuid};
 
 pub enum ToClientMk2 {
 	V4(v4::ToClient),
 	V5(v5::ToClient),
-	V8(v8::ToClient),
+	V7(v7::ToClient),
 }
 
 impl OwnedVersionedData for ToClientMk2 {
-	type Latest = v8::ToClient;
+	type Latest = v7::ToClient;
 
-	fn wrap_latest(latest: v8::ToClient) -> Self {
-		ToClientMk2::V8(latest)
+	fn wrap_latest(latest: v7::ToClient) -> Self {
+		ToClientMk2::V7(latest)
 	}
 
 	fn unwrap_latest(self) -> Result<Self::Latest> {
-		if let ToClientMk2::V8(data) = self {
+		if let ToClientMk2::V7(data) = self {
 			Ok(data)
 		} else {
 			bail!("version not latest");
@@ -30,9 +30,7 @@ impl OwnedVersionedData for ToClientMk2 {
 		match version {
 			4 => Ok(ToClientMk2::V4(serde_bare::from_slice(payload)?)),
 			5 => Ok(ToClientMk2::V5(serde_bare::from_slice(payload)?)),
-			// v6, v7 and v8 share a ToClient binary format for every variant
-			// that existed before v8.
-			6 | 7 | 8 => Ok(ToClientMk2::V8(serde_bare::from_slice(payload)?)),
+			6 | 7 => Ok(ToClientMk2::V7(serde_bare::from_slice(payload)?)),
 			_ => bail!("invalid version: {version}"),
 		}
 	}
@@ -41,16 +39,16 @@ impl OwnedVersionedData for ToClientMk2 {
 		match self {
 			ToClientMk2::V4(data) => serde_bare::to_vec(&data).map_err(Into::into),
 			ToClientMk2::V5(data) => serde_bare::to_vec(&data).map_err(Into::into),
-			ToClientMk2::V8(data) => serde_bare::to_vec(&data).map_err(Into::into),
+			ToClientMk2::V7(data) => serde_bare::to_vec(&data).map_err(Into::into),
 		}
 	}
 
 	fn deserialize_converters() -> Vec<impl Fn(Self) -> Result<Self>> {
-		vec![Ok, Ok, Ok, Self::v4_to_v5, Self::v5_to_v8, Ok]
+		vec![Ok, Ok, Ok, Self::v4_to_v5, Self::v5_to_v7, Ok]
 	}
 
 	fn serialize_converters() -> Vec<impl Fn(Self) -> Result<Self>> {
-		vec![Ok, Self::v8_to_v5, Self::v5_to_v4, Ok, Ok, Ok]
+		vec![Ok, Self::v7_to_v5, Self::v5_to_v4, Ok, Ok, Ok]
 	}
 }
 
@@ -229,30 +227,30 @@ impl ToClientMk2 {
 		}
 	}
 
-	fn v5_to_v8(self) -> Result<Self> {
+	fn v5_to_v7(self) -> Result<Self> {
 		if let ToClientMk2::V5(x) = self {
 			let inner = match x {
-				v5::ToClient::ToClientInit(init) => v8::ToClient::ToClientInit(v8::ToClientInit {
+				v5::ToClient::ToClientInit(init) => v7::ToClient::ToClientInit(v7::ToClientInit {
 					runner_id: init.runner_id,
-					metadata: v8::ProtocolMetadata {
+					metadata: v7::ProtocolMetadata {
 						runner_lost_threshold: init.metadata.runner_lost_threshold,
 						actor_stop_threshold: 0,
 						serverless_drain_grace_period: None,
 					},
 				}),
-				v5::ToClient::ToClientCommands(commands) => v8::ToClient::ToClientCommands(
+				v5::ToClient::ToClientCommands(commands) => v7::ToClient::ToClientCommands(
 					commands
 						.into_iter()
-						.map(|cmd| v8::CommandWrapper {
-							checkpoint: v8::ActorCheckpoint {
+						.map(|cmd| v7::CommandWrapper {
+							checkpoint: v7::ActorCheckpoint {
 								actor_id: cmd.checkpoint.actor_id,
 								generation: cmd.checkpoint.generation,
 								index: cmd.checkpoint.index,
 							},
 							inner: match cmd.inner {
 								v5::Command::CommandStartActor(start) => {
-									v8::Command::CommandStartActor(v8::CommandStartActor {
-										config: v8::ActorConfig {
+									v7::Command::CommandStartActor(v7::CommandStartActor {
+										config: v7::ActorConfig {
 											name: start.config.name,
 											key: start.config.key,
 											create_ts: start.config.create_ts,
@@ -261,24 +259,24 @@ impl ToClientMk2 {
 										hibernating_requests: start
 											.hibernating_requests
 											.into_iter()
-											.map(|req| v8::HibernatingRequest {
+											.map(|req| v7::HibernatingRequest {
 												gateway_id: req.gateway_id,
 												request_id: req.request_id,
 											})
 											.collect(),
 									})
 								}
-								v5::Command::CommandStopActor => v8::Command::CommandStopActor,
+								v5::Command::CommandStopActor => v7::Command::CommandStopActor,
 							},
 						})
 						.collect(),
 				),
 				v5::ToClient::ToClientAckEvents(ack) => {
-					v8::ToClient::ToClientAckEvents(v8::ToClientAckEvents {
+					v7::ToClient::ToClientAckEvents(v7::ToClientAckEvents {
 						last_event_checkpoints: ack
 							.last_event_checkpoints
 							.into_iter()
-							.map(|cp| v8::ActorCheckpoint {
+							.map(|cp| v7::ActorCheckpoint {
 								actor_id: cp.actor_id,
 								generation: cp.generation,
 								index: cp.index,
@@ -287,44 +285,44 @@ impl ToClientMk2 {
 					})
 				}
 				v5::ToClient::ToClientKvResponse(resp) => {
-					v8::ToClient::ToClientKvResponse(v8::ToClientKvResponse {
+					v7::ToClient::ToClientKvResponse(v7::ToClientKvResponse {
 						request_id: resp.request_id,
-						data: convert_kv_response_data_v5_to_v8(resp.data),
+						data: convert_kv_response_data_v5_to_v7(resp.data),
 					})
 				}
 				v5::ToClient::ToClientTunnelMessage(msg) => {
-					v8::ToClient::ToClientTunnelMessage(v8::ToClientTunnelMessage {
-						message_id: v8::MessageId {
+					v7::ToClient::ToClientTunnelMessage(v7::ToClientTunnelMessage {
+						message_id: v7::MessageId {
 							gateway_id: msg.message_id.gateway_id,
 							request_id: msg.message_id.request_id,
 							message_index: msg.message_id.message_index,
 						},
-						message_kind: convert_to_client_tunnel_message_kind_v5_to_v8(
+						message_kind: convert_to_client_tunnel_message_kind_v5_to_v7(
 							msg.message_kind,
 						),
 					})
 				}
 				v5::ToClient::ToClientPing(ping) => {
-					v8::ToClient::ToClientPing(v8::ToClientPing { ts: ping.ts })
+					v7::ToClient::ToClientPing(v7::ToClientPing { ts: ping.ts })
 				}
 			};
 
-			Ok(ToClientMk2::V8(inner))
+			Ok(ToClientMk2::V7(inner))
 		} else {
 			bail!("unexpected version");
 		}
 	}
 
-	fn v8_to_v5(self) -> Result<Self> {
-		if let ToClientMk2::V8(x) = self {
+	fn v7_to_v5(self) -> Result<Self> {
+		if let ToClientMk2::V7(x) = self {
 			let inner = match x {
-				v8::ToClient::ToClientInit(init) => v5::ToClient::ToClientInit(v5::ToClientInit {
+				v7::ToClient::ToClientInit(init) => v5::ToClient::ToClientInit(v5::ToClientInit {
 					runner_id: init.runner_id,
 					metadata: v5::ProtocolMetadata {
 						runner_lost_threshold: init.metadata.runner_lost_threshold,
 					},
 				}),
-				v8::ToClient::ToClientCommands(commands) => v5::ToClient::ToClientCommands(
+				v7::ToClient::ToClientCommands(commands) => v5::ToClient::ToClientCommands(
 					commands
 						.into_iter()
 						.map(|cmd| v5::CommandWrapper {
@@ -334,7 +332,7 @@ impl ToClientMk2 {
 								index: cmd.checkpoint.index,
 							},
 							inner: match cmd.inner {
-								v8::Command::CommandStartActor(start) => {
+								v7::Command::CommandStartActor(start) => {
 									v5::Command::CommandStartActor(v5::CommandStartActor {
 										config: v5::ActorConfig {
 											name: start.config.name,
@@ -352,12 +350,12 @@ impl ToClientMk2 {
 											.collect(),
 									})
 								}
-								v8::Command::CommandStopActor => v5::Command::CommandStopActor,
+								v7::Command::CommandStopActor => v5::Command::CommandStopActor,
 							},
 						})
 						.collect(),
 				),
-				v8::ToClient::ToClientAckEvents(ack) => {
+				v7::ToClient::ToClientAckEvents(ack) => {
 					v5::ToClient::ToClientAckEvents(v5::ToClientAckEvents {
 						last_event_checkpoints: ack
 							.last_event_checkpoints
@@ -370,25 +368,25 @@ impl ToClientMk2 {
 							.collect(),
 					})
 				}
-				v8::ToClient::ToClientKvResponse(resp) => {
+				v7::ToClient::ToClientKvResponse(resp) => {
 					v5::ToClient::ToClientKvResponse(v5::ToClientKvResponse {
 						request_id: resp.request_id,
-						data: convert_kv_response_data_v8_to_v5(resp.data),
+						data: convert_kv_response_data_v7_to_v5(resp.data),
 					})
 				}
-				v8::ToClient::ToClientTunnelMessage(msg) => {
+				v7::ToClient::ToClientTunnelMessage(msg) => {
 					v5::ToClient::ToClientTunnelMessage(v5::ToClientTunnelMessage {
 						message_id: v5::MessageId {
 							gateway_id: msg.message_id.gateway_id,
 							request_id: msg.message_id.request_id,
 							message_index: msg.message_id.message_index,
 						},
-						message_kind: convert_to_client_tunnel_message_kind_v8_to_v5(
+						message_kind: convert_to_client_tunnel_message_kind_v7_to_v5(
 							msg.message_kind,
 						),
 					})
 				}
-				v8::ToClient::ToClientPing(ping) => {
+				v7::ToClient::ToClientPing(ping) => {
 					v5::ToClient::ToClientPing(v5::ToClientPing { ts: ping.ts })
 				}
 			};
@@ -403,18 +401,18 @@ impl ToClientMk2 {
 pub enum ToServerMk2 {
 	V4(v4::ToServer),
 	V6(v6::ToServer),
-	V8(v8::ToServer),
+	V7(v7::ToServer),
 }
 
 impl OwnedVersionedData for ToServerMk2 {
-	type Latest = v8::ToServer;
+	type Latest = v7::ToServer;
 
-	fn wrap_latest(latest: v8::ToServer) -> Self {
-		ToServerMk2::V8(latest)
+	fn wrap_latest(latest: v7::ToServer) -> Self {
+		ToServerMk2::V7(latest)
 	}
 
 	fn unwrap_latest(self) -> Result<Self::Latest> {
-		if let ToServerMk2::V8(data) = self {
+		if let ToServerMk2::V7(data) = self {
 			Ok(data)
 		} else {
 			bail!("version not latest");
@@ -426,9 +424,7 @@ impl OwnedVersionedData for ToServerMk2 {
 			4 => Ok(ToServerMk2::V4(serde_bare::from_slice(payload)?)),
 			// v5 and v6 have the same ToServer binary format
 			5 | 6 => Ok(ToServerMk2::V6(serde_bare::from_slice(payload)?)),
-			// v7 and v8 share a ToServer binary format for every variant that
-			// existed before v8.
-			7 | 8 => Ok(ToServerMk2::V8(serde_bare::from_slice(payload)?)),
+			7 => Ok(ToServerMk2::V7(serde_bare::from_slice(payload)?)),
 			_ => bail!("invalid version: {version}"),
 		}
 	}
@@ -437,18 +433,18 @@ impl OwnedVersionedData for ToServerMk2 {
 		match self {
 			ToServerMk2::V4(data) => serde_bare::to_vec(&data).map_err(Into::into),
 			ToServerMk2::V6(data) => serde_bare::to_vec(&data).map_err(Into::into),
-			ToServerMk2::V8(data) => serde_bare::to_vec(&data).map_err(Into::into),
+			ToServerMk2::V7(data) => serde_bare::to_vec(&data).map_err(Into::into),
 		}
 	}
 
 	fn deserialize_converters() -> Vec<impl Fn(Self) -> Result<Self>> {
 		// No changes between v1 and v4, no changes between v5 and v6
-		vec![Ok, Ok, Ok, Self::v4_to_v6, Ok, Self::v6_to_v8]
+		vec![Ok, Ok, Ok, Self::v4_to_v6, Ok, Self::v6_to_v7]
 	}
 
 	fn serialize_converters() -> Vec<impl Fn(Self) -> Result<Self>> {
 		// No changes between v1 and v4, no changes between v5 and v6
-		vec![Self::v8_to_v6, Ok, Self::v6_to_v4, Ok, Ok, Ok]
+		vec![Self::v7_to_v6, Ok, Self::v6_to_v4, Ok, Ok, Ok]
 	}
 }
 
@@ -655,10 +651,10 @@ impl ToServerMk2 {
 		}
 	}
 
-	fn v6_to_v8(self) -> Result<Self> {
+	fn v6_to_v7(self) -> Result<Self> {
 		if let ToServerMk2::V6(x) = self {
 			let inner = match x {
-				v6::ToServer::ToServerInit(init) => v8::ToServer::ToServerInit(v8::ToServerInit {
+				v6::ToServer::ToServerInit(init) => v7::ToServer::ToServerInit(v7::ToServerInit {
 					name: init.name,
 					version: init.version,
 					total_slots: init.total_slots,
@@ -667,7 +663,7 @@ impl ToServerMk2 {
 							.map(|(k, v)| {
 								(
 									k,
-									v8::ActorName {
+									v7::ActorName {
 										metadata: v.metadata,
 									},
 								)
@@ -676,41 +672,41 @@ impl ToServerMk2 {
 					}),
 					metadata: init.metadata,
 				}),
-				v6::ToServer::ToServerEvents(events) => v8::ToServer::ToServerEvents(
+				v6::ToServer::ToServerEvents(events) => v7::ToServer::ToServerEvents(
 					events
 						.into_iter()
-						.map(|event| v8::EventWrapper {
-							checkpoint: v8::ActorCheckpoint {
+						.map(|event| v7::EventWrapper {
+							checkpoint: v7::ActorCheckpoint {
 								actor_id: event.checkpoint.actor_id,
 								generation: event.checkpoint.generation,
 								index: event.checkpoint.index,
 							},
 							inner: match event.inner {
 								v6::Event::EventActorIntent(intent) => {
-									v8::Event::EventActorIntent(v8::EventActorIntent {
+									v7::Event::EventActorIntent(v7::EventActorIntent {
 										intent: match intent.intent {
 											v6::ActorIntent::ActorIntentSleep => {
-												v8::ActorIntent::ActorIntentSleep
+												v7::ActorIntent::ActorIntentSleep
 											}
 											v6::ActorIntent::ActorIntentStop => {
-												v8::ActorIntent::ActorIntentStop
+												v7::ActorIntent::ActorIntentStop
 											}
 										},
 									})
 								}
 								v6::Event::EventActorStateUpdate(state) => {
-									v8::Event::EventActorStateUpdate(v8::EventActorStateUpdate {
+									v7::Event::EventActorStateUpdate(v7::EventActorStateUpdate {
 										state: match state.state {
 											v6::ActorState::ActorStateRunning => {
-												v8::ActorState::ActorStateRunning
+												v7::ActorState::ActorStateRunning
 											}
 											v6::ActorState::ActorStateStopped(stopped) => {
-												v8::ActorState::ActorStateStopped(
-													v8::ActorStateStopped {
+												v7::ActorState::ActorStateStopped(
+													v7::ActorStateStopped {
 														code: match stopped.code {
-															v6::StopCode::Ok => v8::StopCode::Ok,
+															v6::StopCode::Ok => v7::StopCode::Ok,
 															v6::StopCode::Error => {
-																v8::StopCode::Error
+																v7::StopCode::Error
 															}
 														},
 														message: stopped.message,
@@ -721,7 +717,7 @@ impl ToServerMk2 {
 									})
 								}
 								v6::Event::EventActorSetAlarm(alarm) => {
-									v8::Event::EventActorSetAlarm(v8::EventActorSetAlarm {
+									v7::Event::EventActorSetAlarm(v7::EventActorSetAlarm {
 										alarm_ts: alarm.alarm_ts,
 									})
 								}
@@ -730,11 +726,11 @@ impl ToServerMk2 {
 						.collect(),
 				),
 				v6::ToServer::ToServerAckCommands(ack) => {
-					v8::ToServer::ToServerAckCommands(v8::ToServerAckCommands {
+					v7::ToServer::ToServerAckCommands(v7::ToServerAckCommands {
 						last_command_checkpoints: ack
 							.last_command_checkpoints
 							.into_iter()
-							.map(|cp| v8::ActorCheckpoint {
+							.map(|cp| v7::ActorCheckpoint {
 								actor_id: cp.actor_id,
 								generation: cp.generation,
 								index: cp.index,
@@ -742,28 +738,28 @@ impl ToServerMk2 {
 							.collect(),
 					})
 				}
-				v6::ToServer::ToServerStopping => v8::ToServer::ToServerStopping,
+				v6::ToServer::ToServerStopping => v7::ToServer::ToServerStopping,
 				v6::ToServer::ToServerPong(pong) => {
-					v8::ToServer::ToServerPong(v8::ToServerPong { ts: pong.ts })
+					v7::ToServer::ToServerPong(v7::ToServerPong { ts: pong.ts })
 				}
 				v6::ToServer::ToServerKvRequest(req) => {
-					v8::ToServer::ToServerKvRequest(v8::ToServerKvRequest {
+					v7::ToServer::ToServerKvRequest(v7::ToServerKvRequest {
 						actor_id: req.actor_id,
 						request_id: req.request_id,
-						data: convert_kv_request_data_v6_to_v8(req.data),
+						data: convert_kv_request_data_v6_to_v7(req.data),
 					})
 				}
 				v6::ToServer::ToServerTunnelMessage(msg) => {
-					v8::ToServer::ToServerTunnelMessage(v8::ToServerTunnelMessage {
-						message_id: v8::MessageId {
+					v7::ToServer::ToServerTunnelMessage(v7::ToServerTunnelMessage {
+						message_id: v7::MessageId {
 							gateway_id: msg.message_id.gateway_id,
 							request_id: msg.message_id.request_id,
 							message_index: msg.message_id.message_index,
 						},
 						message_kind: match msg.message_kind {
 							v6::ToServerTunnelMessageKind::ToServerResponseStart(resp) => {
-								v8::ToServerTunnelMessageKind::ToServerResponseStart(
-									v8::ToServerResponseStart {
+								v7::ToServerTunnelMessageKind::ToServerResponseStart(
+									v7::ToServerResponseStart {
 										status: resp.status,
 										headers: resp.headers,
 										body: resp.body,
@@ -772,39 +768,39 @@ impl ToServerMk2 {
 								)
 							}
 							v6::ToServerTunnelMessageKind::ToServerResponseChunk(chunk) => {
-								v8::ToServerTunnelMessageKind::ToServerResponseChunk(
-									v8::ToServerResponseChunk {
+								v7::ToServerTunnelMessageKind::ToServerResponseChunk(
+									v7::ToServerResponseChunk {
 										body: chunk.body,
 										finish: chunk.finish,
 									},
 								)
 							}
 							v6::ToServerTunnelMessageKind::ToServerResponseAbort => {
-								v8::ToServerTunnelMessageKind::ToServerResponseAbort
+								v7::ToServerTunnelMessageKind::ToServerResponseAbort
 							}
 							v6::ToServerTunnelMessageKind::ToServerWebSocketOpen(open) => {
-								v8::ToServerTunnelMessageKind::ToServerWebSocketOpen(
-									v8::ToServerWebSocketOpen {
+								v7::ToServerTunnelMessageKind::ToServerWebSocketOpen(
+									v7::ToServerWebSocketOpen {
 										can_hibernate: open.can_hibernate,
 									},
 								)
 							}
 							v6::ToServerTunnelMessageKind::ToServerWebSocketMessage(message) => {
-								v8::ToServerTunnelMessageKind::ToServerWebSocketMessage(
-									v8::ToServerWebSocketMessage {
+								v7::ToServerTunnelMessageKind::ToServerWebSocketMessage(
+									v7::ToServerWebSocketMessage {
 										data: message.data,
 										binary: message.binary,
 									},
 								)
 							}
 							v6::ToServerTunnelMessageKind::ToServerWebSocketMessageAck(ack) => {
-								v8::ToServerTunnelMessageKind::ToServerWebSocketMessageAck(
-									v8::ToServerWebSocketMessageAck { index: ack.index },
+								v7::ToServerTunnelMessageKind::ToServerWebSocketMessageAck(
+									v7::ToServerWebSocketMessageAck { index: ack.index },
 								)
 							}
 							v6::ToServerTunnelMessageKind::ToServerWebSocketClose(close) => {
-								v8::ToServerTunnelMessageKind::ToServerWebSocketClose(
-									v8::ToServerWebSocketClose {
+								v7::ToServerTunnelMessageKind::ToServerWebSocketClose(
+									v7::ToServerWebSocketClose {
 										code: close.code,
 										reason: close.reason,
 										hibernate: close.hibernate,
@@ -816,16 +812,16 @@ impl ToServerMk2 {
 				}
 			};
 
-			Ok(ToServerMk2::V8(inner))
+			Ok(ToServerMk2::V7(inner))
 		} else {
 			bail!("unexpected version");
 		}
 	}
 
-	fn v8_to_v6(self) -> Result<Self> {
-		if let ToServerMk2::V8(x) = self {
+	fn v7_to_v6(self) -> Result<Self> {
+		if let ToServerMk2::V7(x) = self {
 			let inner = match x {
-				v8::ToServer::ToServerInit(init) => v6::ToServer::ToServerInit(v6::ToServerInit {
+				v7::ToServer::ToServerInit(init) => v6::ToServer::ToServerInit(v6::ToServerInit {
 					name: init.name,
 					version: init.version,
 					total_slots: init.total_slots,
@@ -843,7 +839,7 @@ impl ToServerMk2 {
 					}),
 					metadata: init.metadata,
 				}),
-				v8::ToServer::ToServerEvents(events) => v6::ToServer::ToServerEvents(
+				v7::ToServer::ToServerEvents(events) => v6::ToServer::ToServerEvents(
 					events
 						.into_iter()
 						.map(|event| v6::EventWrapper {
@@ -853,30 +849,30 @@ impl ToServerMk2 {
 								index: event.checkpoint.index,
 							},
 							inner: match event.inner {
-								v8::Event::EventActorIntent(intent) => {
+								v7::Event::EventActorIntent(intent) => {
 									v6::Event::EventActorIntent(v6::EventActorIntent {
 										intent: match intent.intent {
-											v8::ActorIntent::ActorIntentSleep => {
+											v7::ActorIntent::ActorIntentSleep => {
 												v6::ActorIntent::ActorIntentSleep
 											}
-											v8::ActorIntent::ActorIntentStop => {
+											v7::ActorIntent::ActorIntentStop => {
 												v6::ActorIntent::ActorIntentStop
 											}
 										},
 									})
 								}
-								v8::Event::EventActorStateUpdate(state) => {
+								v7::Event::EventActorStateUpdate(state) => {
 									v6::Event::EventActorStateUpdate(v6::EventActorStateUpdate {
 										state: match state.state {
-											v8::ActorState::ActorStateRunning => {
+											v7::ActorState::ActorStateRunning => {
 												v6::ActorState::ActorStateRunning
 											}
-											v8::ActorState::ActorStateStopped(stopped) => {
+											v7::ActorState::ActorStateStopped(stopped) => {
 												v6::ActorState::ActorStateStopped(
 													v6::ActorStateStopped {
 														code: match stopped.code {
-															v8::StopCode::Ok => v6::StopCode::Ok,
-															v8::StopCode::Error => {
+															v7::StopCode::Ok => v6::StopCode::Ok,
+															v7::StopCode::Error => {
 																v6::StopCode::Error
 															}
 														},
@@ -887,7 +883,7 @@ impl ToServerMk2 {
 										},
 									})
 								}
-								v8::Event::EventActorSetAlarm(alarm) => {
+								v7::Event::EventActorSetAlarm(alarm) => {
 									v6::Event::EventActorSetAlarm(v6::EventActorSetAlarm {
 										alarm_ts: alarm.alarm_ts,
 									})
@@ -896,7 +892,7 @@ impl ToServerMk2 {
 						})
 						.collect(),
 				),
-				v8::ToServer::ToServerAckCommands(ack) => {
+				v7::ToServer::ToServerAckCommands(ack) => {
 					v6::ToServer::ToServerAckCommands(v6::ToServerAckCommands {
 						last_command_checkpoints: ack
 							.last_command_checkpoints
@@ -909,18 +905,18 @@ impl ToServerMk2 {
 							.collect(),
 					})
 				}
-				v8::ToServer::ToServerStopping => v6::ToServer::ToServerStopping,
-				v8::ToServer::ToServerPong(pong) => {
+				v7::ToServer::ToServerStopping => v6::ToServer::ToServerStopping,
+				v7::ToServer::ToServerPong(pong) => {
 					v6::ToServer::ToServerPong(v6::ToServerPong { ts: pong.ts })
 				}
-				v8::ToServer::ToServerKvRequest(req) => {
+				v7::ToServer::ToServerKvRequest(req) => {
 					v6::ToServer::ToServerKvRequest(v6::ToServerKvRequest {
 						actor_id: req.actor_id,
 						request_id: req.request_id,
-						data: convert_kv_request_data_v8_to_v6(req.data)?,
+						data: convert_kv_request_data_v7_to_v6(req.data)?,
 					})
 				}
-				v8::ToServer::ToServerTunnelMessage(msg) => {
+				v7::ToServer::ToServerTunnelMessage(msg) => {
 					v6::ToServer::ToServerTunnelMessage(v6::ToServerTunnelMessage {
 						message_id: v6::MessageId {
 							gateway_id: msg.message_id.gateway_id,
@@ -928,7 +924,7 @@ impl ToServerMk2 {
 							message_index: msg.message_id.message_index,
 						},
 						message_kind: match msg.message_kind {
-							v8::ToServerTunnelMessageKind::ToServerResponseStart(resp) => {
+							v7::ToServerTunnelMessageKind::ToServerResponseStart(resp) => {
 								v6::ToServerTunnelMessageKind::ToServerResponseStart(
 									v6::ToServerResponseStart {
 										status: resp.status,
@@ -938,7 +934,7 @@ impl ToServerMk2 {
 									},
 								)
 							}
-							v8::ToServerTunnelMessageKind::ToServerResponseChunk(chunk) => {
+							v7::ToServerTunnelMessageKind::ToServerResponseChunk(chunk) => {
 								v6::ToServerTunnelMessageKind::ToServerResponseChunk(
 									v6::ToServerResponseChunk {
 										body: chunk.body,
@@ -946,17 +942,17 @@ impl ToServerMk2 {
 									},
 								)
 							}
-							v8::ToServerTunnelMessageKind::ToServerResponseAbort => {
+							v7::ToServerTunnelMessageKind::ToServerResponseAbort => {
 								v6::ToServerTunnelMessageKind::ToServerResponseAbort
 							}
-							v8::ToServerTunnelMessageKind::ToServerWebSocketOpen(open) => {
+							v7::ToServerTunnelMessageKind::ToServerWebSocketOpen(open) => {
 								v6::ToServerTunnelMessageKind::ToServerWebSocketOpen(
 									v6::ToServerWebSocketOpen {
 										can_hibernate: open.can_hibernate,
 									},
 								)
 							}
-							v8::ToServerTunnelMessageKind::ToServerWebSocketMessage(message) => {
+							v7::ToServerTunnelMessageKind::ToServerWebSocketMessage(message) => {
 								v6::ToServerTunnelMessageKind::ToServerWebSocketMessage(
 									v6::ToServerWebSocketMessage {
 										data: message.data,
@@ -964,27 +960,17 @@ impl ToServerMk2 {
 									},
 								)
 							}
-							v8::ToServerTunnelMessageKind::ToServerWebSocketMessageAck(ack) => {
+							v7::ToServerTunnelMessageKind::ToServerWebSocketMessageAck(ack) => {
 								v6::ToServerTunnelMessageKind::ToServerWebSocketMessageAck(
 									v6::ToServerWebSocketMessageAck { index: ack.index },
 								)
 							}
-							v8::ToServerTunnelMessageKind::ToServerWebSocketClose(close) => {
+							v7::ToServerTunnelMessageKind::ToServerWebSocketClose(close) => {
 								v6::ToServerTunnelMessageKind::ToServerWebSocketClose(
 									v6::ToServerWebSocketClose {
 										code: close.code,
 										reason: close.reason,
 										hibernate: close.hibernate,
-									},
-								)
-							}
-							v8::ToServerTunnelMessageKind::ToServerWebSocketDatagram(m) => {
-								// See the note on the standalone converters: an older
-								// peer is on a reliable transport regardless.
-								v6::ToServerTunnelMessageKind::ToServerWebSocketMessage(
-									v6::ToServerWebSocketMessage {
-										data: m.data,
-										binary: true,
 									},
 								)
 							}
@@ -1002,18 +988,18 @@ impl ToServerMk2 {
 
 pub enum ToRunnerMk2 {
 	V4(v4::ToRunner),
-	V8(v8::ToRunner),
+	V7(v7::ToRunner),
 }
 
 impl OwnedVersionedData for ToRunnerMk2 {
-	type Latest = v8::ToRunner;
+	type Latest = v7::ToRunner;
 
-	fn wrap_latest(latest: v8::ToRunner) -> Self {
-		ToRunnerMk2::V8(latest)
+	fn wrap_latest(latest: v7::ToRunner) -> Self {
+		ToRunnerMk2::V7(latest)
 	}
 
 	fn unwrap_latest(self) -> Result<Self::Latest> {
-		if let ToRunnerMk2::V8(data) = self {
+		if let ToRunnerMk2::V7(data) = self {
 			Ok(data)
 		} else {
 			bail!("version not latest");
@@ -1023,7 +1009,7 @@ impl OwnedVersionedData for ToRunnerMk2 {
 	fn deserialize_version(payload: &[u8], version: u16) -> Result<Self> {
 		match version {
 			4 => Ok(ToRunnerMk2::V4(serde_bare::from_slice(payload)?)),
-			5 | 6 | 7 => Ok(ToRunnerMk2::V8(serde_bare::from_slice(payload)?)),
+			5 | 6 | 7 => Ok(ToRunnerMk2::V7(serde_bare::from_slice(payload)?)),
 			_ => bail!("invalid version: {version}"),
 		}
 	}
@@ -1031,7 +1017,7 @@ impl OwnedVersionedData for ToRunnerMk2 {
 	fn serialize_version(self, _version: u16) -> Result<Vec<u8>> {
 		match self {
 			ToRunnerMk2::V4(data) => serde_bare::to_vec(&data).map_err(Into::into),
-			ToRunnerMk2::V8(data) => serde_bare::to_vec(&data).map_err(Into::into),
+			ToRunnerMk2::V7(data) => serde_bare::to_vec(&data).map_err(Into::into),
 		}
 	}
 
@@ -1048,17 +1034,17 @@ impl ToRunnerMk2 {
 	fn v4_to_v7(self) -> Result<Self> {
 		if let ToRunnerMk2::V4(x) = self {
 			let inner = match x {
-				v4::ToRunner::ToRunnerPing(ping) => v8::ToRunner::ToRunnerPing(v8::ToRunnerPing {
+				v4::ToRunner::ToRunnerPing(ping) => v7::ToRunner::ToRunnerPing(v7::ToRunnerPing {
 					gateway_id: ping.gateway_id,
 					request_id: ping.request_id,
 					ts: ping.ts,
 				}),
-				v4::ToRunner::ToRunnerClose => v8::ToRunner::ToRunnerClose,
-				v4::ToRunner::ToClientCommands(commands) => v8::ToRunner::ToClientCommands(
+				v4::ToRunner::ToRunnerClose => v7::ToRunner::ToRunnerClose,
+				v4::ToRunner::ToClientCommands(commands) => v7::ToRunner::ToClientCommands(
 					commands
 						.into_iter()
-						.map(|cmd| v8::CommandWrapper {
-							checkpoint: v8::ActorCheckpoint {
+						.map(|cmd| v7::CommandWrapper {
+							checkpoint: v7::ActorCheckpoint {
 								actor_id: cmd.checkpoint.actor_id,
 								generation: match &cmd.inner {
 									v4::Command::CommandStartActor(start) => start.generation,
@@ -1068,8 +1054,8 @@ impl ToRunnerMk2 {
 							},
 							inner: match cmd.inner {
 								v4::Command::CommandStartActor(start) => {
-									v8::Command::CommandStartActor(v8::CommandStartActor {
-										config: v8::ActorConfig {
+									v7::Command::CommandStartActor(v7::CommandStartActor {
+										config: v7::ActorConfig {
 											name: start.config.name,
 											key: start.config.key,
 											create_ts: start.config.create_ts,
@@ -1078,24 +1064,24 @@ impl ToRunnerMk2 {
 										hibernating_requests: start
 											.hibernating_requests
 											.into_iter()
-											.map(|req| v8::HibernatingRequest {
+											.map(|req| v7::HibernatingRequest {
 												gateway_id: req.gateway_id,
 												request_id: req.request_id,
 											})
 											.collect(),
 									})
 								}
-								v4::Command::CommandStopActor(_) => v8::Command::CommandStopActor,
+								v4::Command::CommandStopActor(_) => v7::Command::CommandStopActor,
 							},
 						})
 						.collect(),
 				),
 				v4::ToRunner::ToClientAckEvents(ack) => {
-					v8::ToRunner::ToClientAckEvents(v8::ToClientAckEvents {
+					v7::ToRunner::ToClientAckEvents(v7::ToClientAckEvents {
 						last_event_checkpoints: ack
 							.last_event_checkpoints
 							.into_iter()
-							.map(|cp| v8::ActorCheckpoint {
+							.map(|cp| v7::ActorCheckpoint {
 								actor_id: cp.actor_id,
 								generation: 0, // Unknown in v4, use default
 								index: cp.index,
@@ -1104,8 +1090,8 @@ impl ToRunnerMk2 {
 					})
 				}
 				v4::ToRunner::ToClientTunnelMessage(msg) => {
-					v8::ToRunner::ToClientTunnelMessage(v8::ToClientTunnelMessage {
-						message_id: v8::MessageId {
+					v7::ToRunner::ToClientTunnelMessage(v7::ToClientTunnelMessage {
+						message_id: v7::MessageId {
 							gateway_id: msg.message_id.gateway_id,
 							request_id: msg.message_id.request_id,
 							message_index: msg.message_id.message_index,
@@ -1117,22 +1103,22 @@ impl ToRunnerMk2 {
 				}
 			};
 
-			Ok(ToRunnerMk2::V8(inner))
+			Ok(ToRunnerMk2::V7(inner))
 		} else {
 			bail!("unexpected version");
 		}
 	}
 
 	fn v7_to_v4(self) -> Result<Self> {
-		if let ToRunnerMk2::V8(x) = self {
+		if let ToRunnerMk2::V7(x) = self {
 			let inner = match x {
-				v8::ToRunner::ToRunnerPing(ping) => v4::ToRunner::ToRunnerPing(v4::ToRunnerPing {
+				v7::ToRunner::ToRunnerPing(ping) => v4::ToRunner::ToRunnerPing(v4::ToRunnerPing {
 					gateway_id: ping.gateway_id,
 					request_id: ping.request_id,
 					ts: ping.ts,
 				}),
-				v8::ToRunner::ToRunnerClose => v4::ToRunner::ToRunnerClose,
-				v8::ToRunner::ToClientCommands(commands) => v4::ToRunner::ToClientCommands(
+				v7::ToRunner::ToRunnerClose => v4::ToRunner::ToRunnerClose,
+				v7::ToRunner::ToClientCommands(commands) => v4::ToRunner::ToClientCommands(
 					commands
 						.into_iter()
 						.map(|cmd| v4::CommandWrapper {
@@ -1141,7 +1127,7 @@ impl ToRunnerMk2 {
 								index: cmd.checkpoint.index,
 							},
 							inner: match cmd.inner {
-								v8::Command::CommandStartActor(start) => {
+								v7::Command::CommandStartActor(start) => {
 									v4::Command::CommandStartActor(v4::CommandStartActor {
 										generation: cmd.checkpoint.generation,
 										config: v4::ActorConfig {
@@ -1160,7 +1146,7 @@ impl ToRunnerMk2 {
 											.collect(),
 									})
 								}
-								v8::Command::CommandStopActor => {
+								v7::Command::CommandStopActor => {
 									v4::Command::CommandStopActor(v4::CommandStopActor {
 										generation: cmd.checkpoint.generation,
 									})
@@ -1169,7 +1155,7 @@ impl ToRunnerMk2 {
 						})
 						.collect(),
 				),
-				v8::ToRunner::ToClientAckEvents(ack) => {
+				v7::ToRunner::ToClientAckEvents(ack) => {
 					v4::ToRunner::ToClientAckEvents(v4::ToClientAckEvents {
 						last_event_checkpoints: ack
 							.last_event_checkpoints
@@ -1181,7 +1167,7 @@ impl ToRunnerMk2 {
 							.collect(),
 					})
 				}
-				v8::ToRunner::ToClientTunnelMessage(msg) => {
+				v7::ToRunner::ToClientTunnelMessage(msg) => {
 					v4::ToRunner::ToClientTunnelMessage(v4::ToClientTunnelMessage {
 						message_id: v4::MessageId {
 							gateway_id: msg.message_id.gateway_id,
@@ -1932,19 +1918,19 @@ impl OwnedVersionedData for ToRunner {
 
 pub enum ToGateway {
 	V3(v3::ToGateway),
-	V8(v8::ToGateway),
+	V7(v7::ToGateway),
 }
 
 impl OwnedVersionedData for ToGateway {
-	type Latest = v8::ToGateway;
+	type Latest = v7::ToGateway;
 
-	fn wrap_latest(latest: v8::ToGateway) -> Self {
-		ToGateway::V8(latest)
+	fn wrap_latest(latest: v7::ToGateway) -> Self {
+		ToGateway::V7(latest)
 	}
 
 	fn unwrap_latest(self) -> Result<Self::Latest> {
 		#[allow(irrefutable_let_patterns)]
-		if let ToGateway::V8(data) = self {
+		if let ToGateway::V7(data) = self {
 			Ok(data)
 		} else {
 			bail!("version not latest");
@@ -1954,7 +1940,7 @@ impl OwnedVersionedData for ToGateway {
 	fn deserialize_version(payload: &[u8], version: u16) -> Result<Self> {
 		match version {
 			1 | 2 | 3 => Ok(ToGateway::V3(serde_bare::from_slice(payload)?)),
-			4 | 5 | 6 | 7 => Ok(ToGateway::V8(serde_bare::from_slice(payload)?)),
+			4 | 5 | 6 | 7 => Ok(ToGateway::V7(serde_bare::from_slice(payload)?)),
 			_ => bail!("invalid version: {version}"),
 		}
 	}
@@ -1962,7 +1948,7 @@ impl OwnedVersionedData for ToGateway {
 	fn serialize_version(self, _version: u16) -> Result<Vec<u8>> {
 		match self {
 			ToGateway::V3(data) => serde_bare::to_vec(&data).map_err(Into::into),
-			ToGateway::V8(data) => serde_bare::to_vec(&data).map_err(Into::into),
+			ToGateway::V7(data) => serde_bare::to_vec(&data).map_err(Into::into),
 		}
 	}
 
@@ -1980,41 +1966,41 @@ impl ToGateway {
 		if let ToGateway::V3(x) = self {
 			let inner = match x {
 				v3::ToGateway::ToGatewayPong(pong) => {
-					v8::ToGateway::ToGatewayPong(v8::ToGatewayPong {
+					v7::ToGateway::ToGatewayPong(v7::ToGatewayPong {
 						request_id: pong.request_id,
 						ts: pong.ts,
 					})
 				}
 				v3::ToGateway::ToServerTunnelMessage(msg) => {
-					v8::ToGateway::ToServerTunnelMessage(v8::ToServerTunnelMessage {
-						message_id: v8::MessageId {
+					v7::ToGateway::ToServerTunnelMessage(v7::ToServerTunnelMessage {
+						message_id: v7::MessageId {
 							gateway_id: msg.message_id.gateway_id,
 							request_id: msg.message_id.request_id,
 							message_index: msg.message_id.message_index,
 						},
-						message_kind: convert_to_server_tunnel_message_kind_v6_to_v8(
+						message_kind: convert_to_server_tunnel_message_kind_v6_to_v7(
 							convert_to_server_tunnel_message_kind_v3_to_v4(msg.message_kind),
 						),
 					})
 				}
 			};
 
-			Ok(ToGateway::V8(inner))
+			Ok(ToGateway::V7(inner))
 		} else {
 			bail!("unexpected version");
 		}
 	}
 
 	fn v7_to_v3(self) -> Result<Self> {
-		if let ToGateway::V8(x) = self {
+		if let ToGateway::V7(x) = self {
 			let inner = match x {
-				v8::ToGateway::ToGatewayPong(pong) => {
+				v7::ToGateway::ToGatewayPong(pong) => {
 					v3::ToGateway::ToGatewayPong(v3::ToGatewayPong {
 						request_id: pong.request_id,
 						ts: pong.ts,
 					})
 				}
-				v8::ToGateway::ToServerTunnelMessage(msg) => {
+				v7::ToGateway::ToServerTunnelMessage(msg) => {
 					v3::ToGateway::ToServerTunnelMessage(v3::ToServerTunnelMessage {
 						message_id: v3::MessageId {
 							gateway_id: msg.message_id.gateway_id,
@@ -2022,7 +2008,7 @@ impl ToGateway {
 							message_index: msg.message_id.message_index,
 						},
 						message_kind: convert_to_server_tunnel_message_kind_v4_to_v3(
-							convert_to_server_tunnel_message_kind_v8_to_v6(msg.message_kind),
+							convert_to_server_tunnel_message_kind_v7_to_v6(msg.message_kind),
 						)?,
 					})
 				}
@@ -2037,19 +2023,19 @@ impl ToGateway {
 
 pub enum ToServerlessServer {
 	V3(v3::ToServerlessServer),
-	V8(v8::ToServerlessServer),
+	V7(v7::ToServerlessServer),
 }
 
 impl OwnedVersionedData for ToServerlessServer {
-	type Latest = v8::ToServerlessServer;
+	type Latest = v7::ToServerlessServer;
 
-	fn wrap_latest(latest: v8::ToServerlessServer) -> Self {
-		ToServerlessServer::V8(latest)
+	fn wrap_latest(latest: v7::ToServerlessServer) -> Self {
+		ToServerlessServer::V7(latest)
 	}
 
 	fn unwrap_latest(self) -> Result<Self::Latest> {
 		#[allow(irrefutable_let_patterns)]
-		if let ToServerlessServer::V8(data) = self {
+		if let ToServerlessServer::V7(data) = self {
 			Ok(data)
 		} else {
 			bail!("version not latest");
@@ -2059,7 +2045,7 @@ impl OwnedVersionedData for ToServerlessServer {
 	fn deserialize_version(payload: &[u8], version: u16) -> Result<Self> {
 		match version {
 			1 | 2 | 3 => Ok(ToServerlessServer::V3(serde_bare::from_slice(payload)?)),
-			4 | 5 | 6 | 7 => Ok(ToServerlessServer::V8(serde_bare::from_slice(payload)?)),
+			4 | 5 | 6 | 7 => Ok(ToServerlessServer::V7(serde_bare::from_slice(payload)?)),
 			_ => bail!("invalid version: {version}"),
 		}
 	}
@@ -2067,7 +2053,7 @@ impl OwnedVersionedData for ToServerlessServer {
 	fn serialize_version(self, _version: u16) -> Result<Vec<u8>> {
 		match self {
 			ToServerlessServer::V3(data) => serde_bare::to_vec(&data).map_err(Into::into),
-			ToServerlessServer::V8(data) => serde_bare::to_vec(&data).map_err(Into::into),
+			ToServerlessServer::V7(data) => serde_bare::to_vec(&data).map_err(Into::into),
 		}
 	}
 
@@ -2085,23 +2071,23 @@ impl ToServerlessServer {
 		if let ToServerlessServer::V3(x) = self {
 			let inner = match x {
 				v3::ToServerlessServer::ToServerlessServerInit(init) => {
-					v8::ToServerlessServer::ToServerlessServerInit(v8::ToServerlessServerInit {
+					v7::ToServerlessServer::ToServerlessServerInit(v7::ToServerlessServerInit {
 						runner_id: init.runner_id,
 						runner_protocol_version: PROTOCOL_MK1_VERSION,
 					})
 				}
 			};
 
-			Ok(ToServerlessServer::V8(inner))
+			Ok(ToServerlessServer::V7(inner))
 		} else {
 			bail!("unexpected version");
 		}
 	}
 
 	fn v7_to_v3(self) -> Result<Self> {
-		if let ToServerlessServer::V8(x) = self {
+		if let ToServerlessServer::V7(x) = self {
 			let inner = match x {
-				v8::ToServerlessServer::ToServerlessServerInit(init) => {
+				v7::ToServerlessServer::ToServerlessServerInit(init) => {
 					v3::ToServerlessServer::ToServerlessServerInit(v3::ToServerlessServerInit {
 						runner_id: init.runner_id,
 					})
@@ -2117,18 +2103,18 @@ impl ToServerlessServer {
 
 pub enum ActorCommandKeyData {
 	V4(v4::ActorCommandKeyData),
-	V8(v8::ActorCommandKeyData),
+	V7(v7::ActorCommandKeyData),
 }
 
 impl OwnedVersionedData for ActorCommandKeyData {
-	type Latest = v8::ActorCommandKeyData;
+	type Latest = v7::ActorCommandKeyData;
 
-	fn wrap_latest(latest: v8::ActorCommandKeyData) -> Self {
-		ActorCommandKeyData::V8(latest)
+	fn wrap_latest(latest: v7::ActorCommandKeyData) -> Self {
+		ActorCommandKeyData::V7(latest)
 	}
 
 	fn unwrap_latest(self) -> Result<Self::Latest> {
-		if let ActorCommandKeyData::V8(data) = self {
+		if let ActorCommandKeyData::V7(data) = self {
 			Ok(data)
 		} else {
 			bail!("version not latest");
@@ -2138,7 +2124,7 @@ impl OwnedVersionedData for ActorCommandKeyData {
 	fn deserialize_version(payload: &[u8], version: u16) -> Result<Self> {
 		match version {
 			4 => Ok(ActorCommandKeyData::V4(serde_bare::from_slice(payload)?)),
-			5 | 6 | 7 => Ok(ActorCommandKeyData::V8(serde_bare::from_slice(payload)?)),
+			5 | 6 | 7 => Ok(ActorCommandKeyData::V7(serde_bare::from_slice(payload)?)),
 			_ => bail!("invalid version: {version}"),
 		}
 	}
@@ -2146,7 +2132,7 @@ impl OwnedVersionedData for ActorCommandKeyData {
 	fn serialize_version(self, _version: u16) -> Result<Vec<u8>> {
 		match self {
 			ActorCommandKeyData::V4(data) => serde_bare::to_vec(&data).map_err(Into::into),
-			ActorCommandKeyData::V8(data) => serde_bare::to_vec(&data).map_err(Into::into),
+			ActorCommandKeyData::V7(data) => serde_bare::to_vec(&data).map_err(Into::into),
 		}
 	}
 
@@ -2164,8 +2150,8 @@ impl ActorCommandKeyData {
 		if let ActorCommandKeyData::V4(x) = self {
 			let inner = match x {
 				v4::ActorCommandKeyData::CommandStartActor(start) => {
-					v8::ActorCommandKeyData::CommandStartActor(v8::CommandStartActor {
-						config: v8::ActorConfig {
+					v7::ActorCommandKeyData::CommandStartActor(v7::CommandStartActor {
+						config: v7::ActorConfig {
 							name: start.config.name,
 							key: start.config.key,
 							create_ts: start.config.create_ts,
@@ -2174,7 +2160,7 @@ impl ActorCommandKeyData {
 						hibernating_requests: start
 							.hibernating_requests
 							.into_iter()
-							.map(|req| v8::HibernatingRequest {
+							.map(|req| v7::HibernatingRequest {
 								gateway_id: req.gateway_id,
 								request_id: req.request_id,
 							})
@@ -2182,21 +2168,21 @@ impl ActorCommandKeyData {
 					})
 				}
 				v4::ActorCommandKeyData::CommandStopActor(_) => {
-					v8::ActorCommandKeyData::CommandStopActor
+					v7::ActorCommandKeyData::CommandStopActor
 				}
 			};
 
-			Ok(ActorCommandKeyData::V8(inner))
+			Ok(ActorCommandKeyData::V7(inner))
 		} else {
 			bail!("unexpected version");
 		}
 	}
 
 	fn v7_to_v4(self) -> Result<Self> {
-		if let ActorCommandKeyData::V8(x) = self {
+		if let ActorCommandKeyData::V7(x) = self {
 			// Since v4 commands have generation but v7 doesn't, use generation 0 as a placeholder
 			let inner = match x {
-				v8::ActorCommandKeyData::CommandStartActor(start) => {
+				v7::ActorCommandKeyData::CommandStartActor(start) => {
 					v4::ActorCommandKeyData::CommandStartActor(v4::CommandStartActor {
 						generation: 0, // Lost during conversion
 						config: v4::ActorConfig {
@@ -2215,7 +2201,7 @@ impl ActorCommandKeyData {
 							.collect(),
 					})
 				}
-				v8::ActorCommandKeyData::CommandStopActor => {
+				v7::ActorCommandKeyData::CommandStopActor => {
 					v4::ActorCommandKeyData::CommandStopActor(v4::CommandStopActor {
 						generation: 0, // Lost during conversion
 					})
@@ -3238,7 +3224,7 @@ fn convert_to_server_tunnel_message_kind_v4_to_v3(
 
 // Used specifically for the gateway because there were no changes between mk2 and mk1 for the tunnel messages
 pub fn to_client_tunnel_message_mk2_to_mk1(
-	msg: v8::ToClientTunnelMessage,
+	msg: v7::ToClientTunnelMessage,
 ) -> v3::ToClientTunnelMessage {
 	v3::ToClientTunnelMessage {
 		message_id: v3::MessageId {
@@ -3251,10 +3237,10 @@ pub fn to_client_tunnel_message_mk2_to_mk1(
 }
 
 fn convert_to_client_tunnel_message_kind_mk2_to_mk1(
-	kind: v8::ToClientTunnelMessageKind,
+	kind: v7::ToClientTunnelMessageKind,
 ) -> v3::ToClientTunnelMessageKind {
 	match kind {
-		v8::ToClientTunnelMessageKind::ToClientRequestStart(req) => {
+		v7::ToClientTunnelMessageKind::ToClientRequestStart(req) => {
 			v3::ToClientTunnelMessageKind::ToClientRequestStart(v3::ToClientRequestStart {
 				actor_id: req.actor_id,
 				method: req.method,
@@ -3264,42 +3250,32 @@ fn convert_to_client_tunnel_message_kind_mk2_to_mk1(
 				stream: req.stream,
 			})
 		}
-		v8::ToClientTunnelMessageKind::ToClientRequestChunk(chunk) => {
+		v7::ToClientTunnelMessageKind::ToClientRequestChunk(chunk) => {
 			v3::ToClientTunnelMessageKind::ToClientRequestChunk(v3::ToClientRequestChunk {
 				body: chunk.body,
 				finish: chunk.finish,
 			})
 		}
-		v8::ToClientTunnelMessageKind::ToClientRequestAbort => {
+		v7::ToClientTunnelMessageKind::ToClientRequestAbort => {
 			v3::ToClientTunnelMessageKind::ToClientRequestAbort
 		}
-		v8::ToClientTunnelMessageKind::ToClientWebSocketOpen(ws) => {
+		v7::ToClientTunnelMessageKind::ToClientWebSocketOpen(ws) => {
 			v3::ToClientTunnelMessageKind::ToClientWebSocketOpen(v3::ToClientWebSocketOpen {
 				actor_id: ws.actor_id,
 				path: ws.path,
 				headers: ws.headers,
 			})
 		}
-		v8::ToClientTunnelMessageKind::ToClientWebSocketMessage(msg) => {
+		v7::ToClientTunnelMessageKind::ToClientWebSocketMessage(msg) => {
 			v3::ToClientTunnelMessageKind::ToClientWebSocketMessage(v3::ToClientWebSocketMessage {
 				data: msg.data,
 				binary: msg.binary,
 			})
 		}
-		v8::ToClientTunnelMessageKind::ToClientWebSocketClose(close) => {
+		v7::ToClientTunnelMessageKind::ToClientWebSocketClose(close) => {
 			v3::ToClientTunnelMessageKind::ToClientWebSocketClose(v3::ToClientWebSocketClose {
 				code: close.code,
 				reason: close.reason,
-			})
-		}
-		v8::ToClientTunnelMessageKind::ToClientWebSocketDatagram(msg) => {
-			// A peer on an older protocol has no datagram, and no WebTransport
-			// either, so it would have received this over a reliable WebSocket
-			// regardless. Delivering it as one loses the drop semantics that
-			// peer could not have used anyway, rather than losing the pose.
-			v3::ToClientTunnelMessageKind::ToClientWebSocketMessage(v3::ToClientWebSocketMessage {
-				data: msg.data,
-				binary: true,
 			})
 		}
 	}
@@ -3581,58 +3557,58 @@ fn convert_kv_request_data_v6_to_v4(data: v6::KvRequestData) -> v4::KvRequestDat
 
 // MARK: v6 <-> v7 helpers (KvDeleteRangeRequest was introduced in v7)
 
-fn convert_kv_request_data_v6_to_v8(data: v6::KvRequestData) -> v8::KvRequestData {
+fn convert_kv_request_data_v6_to_v7(data: v6::KvRequestData) -> v7::KvRequestData {
 	match data {
 		v6::KvRequestData::KvGetRequest(req) => {
-			v8::KvRequestData::KvGetRequest(v8::KvGetRequest { keys: req.keys })
+			v7::KvRequestData::KvGetRequest(v7::KvGetRequest { keys: req.keys })
 		}
 		v6::KvRequestData::KvListRequest(req) => {
-			v8::KvRequestData::KvListRequest(v8::KvListRequest {
-				query: convert_kv_list_query_v6_to_v8(req.query),
+			v7::KvRequestData::KvListRequest(v7::KvListRequest {
+				query: convert_kv_list_query_v6_to_v7(req.query),
 				reverse: req.reverse,
 				limit: req.limit,
 			})
 		}
-		v6::KvRequestData::KvPutRequest(req) => v8::KvRequestData::KvPutRequest(v8::KvPutRequest {
+		v6::KvRequestData::KvPutRequest(req) => v7::KvRequestData::KvPutRequest(v7::KvPutRequest {
 			keys: req.keys,
 			values: req.values,
 		}),
 		v6::KvRequestData::KvDeleteRequest(req) => {
-			v8::KvRequestData::KvDeleteRequest(v8::KvDeleteRequest { keys: req.keys })
+			v7::KvRequestData::KvDeleteRequest(v7::KvDeleteRequest { keys: req.keys })
 		}
-		v6::KvRequestData::KvDropRequest => v8::KvRequestData::KvDropRequest,
+		v6::KvRequestData::KvDropRequest => v7::KvRequestData::KvDropRequest,
 	}
 }
 
-fn convert_kv_request_data_v8_to_v6(data: v8::KvRequestData) -> Result<v6::KvRequestData> {
+fn convert_kv_request_data_v7_to_v6(data: v7::KvRequestData) -> Result<v6::KvRequestData> {
 	match data {
-		v8::KvRequestData::KvGetRequest(req) => {
+		v7::KvRequestData::KvGetRequest(req) => {
 			Ok(v6::KvRequestData::KvGetRequest(v6::KvGetRequest {
 				keys: req.keys,
 			}))
 		}
-		v8::KvRequestData::KvListRequest(req) => {
+		v7::KvRequestData::KvListRequest(req) => {
 			Ok(v6::KvRequestData::KvListRequest(v6::KvListRequest {
-				query: convert_kv_list_query_v8_to_v6(req.query),
+				query: convert_kv_list_query_v7_to_v6(req.query),
 				reverse: req.reverse,
 				limit: req.limit,
 			}))
 		}
-		v8::KvRequestData::KvPutRequest(req) => {
+		v7::KvRequestData::KvPutRequest(req) => {
 			Ok(v6::KvRequestData::KvPutRequest(v6::KvPutRequest {
 				keys: req.keys,
 				values: req.values,
 			}))
 		}
-		v8::KvRequestData::KvDeleteRequest(req) => {
+		v7::KvRequestData::KvDeleteRequest(req) => {
 			Ok(v6::KvRequestData::KvDeleteRequest(v6::KvDeleteRequest {
 				keys: req.keys,
 			}))
 		}
-		v8::KvRequestData::KvDeleteRangeRequest(_) => {
+		v7::KvRequestData::KvDeleteRangeRequest(_) => {
 			bail!("KvDeleteRangeRequest requires runner protocol v7")
 		}
-		v8::KvRequestData::KvDropRequest => Ok(v6::KvRequestData::KvDropRequest),
+		v7::KvRequestData::KvDropRequest => Ok(v6::KvRequestData::KvDropRequest),
 	}
 }
 
@@ -3668,33 +3644,33 @@ fn convert_kv_list_query_v6_to_v4(query: v6::KvListQuery) -> v4::KvListQuery {
 	}
 }
 
-fn convert_kv_list_query_v6_to_v8(query: v6::KvListQuery) -> v8::KvListQuery {
+fn convert_kv_list_query_v6_to_v7(query: v6::KvListQuery) -> v7::KvListQuery {
 	match query {
-		v6::KvListQuery::KvListAllQuery => v8::KvListQuery::KvListAllQuery,
+		v6::KvListQuery::KvListAllQuery => v7::KvListQuery::KvListAllQuery,
 		v6::KvListQuery::KvListRangeQuery(range) => {
-			v8::KvListQuery::KvListRangeQuery(v8::KvListRangeQuery {
+			v7::KvListQuery::KvListRangeQuery(v7::KvListRangeQuery {
 				start: range.start,
 				end: range.end,
 				exclusive: range.exclusive,
 			})
 		}
 		v6::KvListQuery::KvListPrefixQuery(prefix) => {
-			v8::KvListQuery::KvListPrefixQuery(v8::KvListPrefixQuery { key: prefix.key })
+			v7::KvListQuery::KvListPrefixQuery(v7::KvListPrefixQuery { key: prefix.key })
 		}
 	}
 }
 
-fn convert_kv_list_query_v8_to_v6(query: v8::KvListQuery) -> v6::KvListQuery {
+fn convert_kv_list_query_v7_to_v6(query: v7::KvListQuery) -> v6::KvListQuery {
 	match query {
-		v8::KvListQuery::KvListAllQuery => v6::KvListQuery::KvListAllQuery,
-		v8::KvListQuery::KvListRangeQuery(range) => {
+		v7::KvListQuery::KvListAllQuery => v6::KvListQuery::KvListAllQuery,
+		v7::KvListQuery::KvListRangeQuery(range) => {
 			v6::KvListQuery::KvListRangeQuery(v6::KvListRangeQuery {
 				start: range.start,
 				end: range.end,
 				exclusive: range.exclusive,
 			})
 		}
-		v8::KvListQuery::KvListPrefixQuery(prefix) => {
+		v7::KvListQuery::KvListPrefixQuery(prefix) => {
 			v6::KvListQuery::KvListPrefixQuery(v6::KvListPrefixQuery { key: prefix.key })
 		}
 	}
@@ -3970,92 +3946,92 @@ fn convert_kv_metadata_v6_to_v5(metadata: v6::KvMetadata) -> v5::KvMetadata {
 	}
 }
 
-fn convert_kv_response_data_v5_to_v8(data: v5::KvResponseData) -> v8::KvResponseData {
-	convert_kv_response_data_v6_to_v8(convert_kv_response_data_v5_to_v6(data))
+fn convert_kv_response_data_v5_to_v7(data: v5::KvResponseData) -> v7::KvResponseData {
+	convert_kv_response_data_v6_to_v7(convert_kv_response_data_v5_to_v6(data))
 }
 
-fn convert_kv_response_data_v8_to_v5(data: v8::KvResponseData) -> v5::KvResponseData {
-	convert_kv_response_data_v6_to_v5(convert_kv_response_data_v8_to_v6(data))
+fn convert_kv_response_data_v7_to_v5(data: v7::KvResponseData) -> v5::KvResponseData {
+	convert_kv_response_data_v6_to_v5(convert_kv_response_data_v7_to_v6(data))
 }
 
-fn convert_kv_response_data_v6_to_v8(data: v6::KvResponseData) -> v8::KvResponseData {
+fn convert_kv_response_data_v6_to_v7(data: v6::KvResponseData) -> v7::KvResponseData {
 	match data {
 		v6::KvResponseData::KvErrorResponse(err) => {
-			v8::KvResponseData::KvErrorResponse(v8::KvErrorResponse {
+			v7::KvResponseData::KvErrorResponse(v7::KvErrorResponse {
 				message: err.message,
 			})
 		}
 		v6::KvResponseData::KvGetResponse(resp) => {
-			v8::KvResponseData::KvGetResponse(v8::KvGetResponse {
+			v7::KvResponseData::KvGetResponse(v7::KvGetResponse {
 				keys: resp.keys,
 				values: resp.values,
 				metadata: resp
 					.metadata
 					.into_iter()
-					.map(convert_kv_metadata_v6_to_v8)
+					.map(convert_kv_metadata_v6_to_v7)
 					.collect(),
 			})
 		}
 		v6::KvResponseData::KvListResponse(resp) => {
-			v8::KvResponseData::KvListResponse(v8::KvListResponse {
+			v7::KvResponseData::KvListResponse(v7::KvListResponse {
 				keys: resp.keys,
 				values: resp.values,
 				metadata: resp
 					.metadata
 					.into_iter()
-					.map(convert_kv_metadata_v6_to_v8)
+					.map(convert_kv_metadata_v6_to_v7)
 					.collect(),
 			})
 		}
-		v6::KvResponseData::KvPutResponse => v8::KvResponseData::KvPutResponse,
-		v6::KvResponseData::KvDeleteResponse => v8::KvResponseData::KvDeleteResponse,
-		v6::KvResponseData::KvDropResponse => v8::KvResponseData::KvDropResponse,
+		v6::KvResponseData::KvPutResponse => v7::KvResponseData::KvPutResponse,
+		v6::KvResponseData::KvDeleteResponse => v7::KvResponseData::KvDeleteResponse,
+		v6::KvResponseData::KvDropResponse => v7::KvResponseData::KvDropResponse,
 	}
 }
 
-fn convert_kv_response_data_v8_to_v6(data: v8::KvResponseData) -> v6::KvResponseData {
+fn convert_kv_response_data_v7_to_v6(data: v7::KvResponseData) -> v6::KvResponseData {
 	match data {
-		v8::KvResponseData::KvErrorResponse(err) => {
+		v7::KvResponseData::KvErrorResponse(err) => {
 			v6::KvResponseData::KvErrorResponse(v6::KvErrorResponse {
 				message: err.message,
 			})
 		}
-		v8::KvResponseData::KvGetResponse(resp) => {
+		v7::KvResponseData::KvGetResponse(resp) => {
 			v6::KvResponseData::KvGetResponse(v6::KvGetResponse {
 				keys: resp.keys,
 				values: resp.values,
 				metadata: resp
 					.metadata
 					.into_iter()
-					.map(convert_kv_metadata_v8_to_v6)
+					.map(convert_kv_metadata_v7_to_v6)
 					.collect(),
 			})
 		}
-		v8::KvResponseData::KvListResponse(resp) => {
+		v7::KvResponseData::KvListResponse(resp) => {
 			v6::KvResponseData::KvListResponse(v6::KvListResponse {
 				keys: resp.keys,
 				values: resp.values,
 				metadata: resp
 					.metadata
 					.into_iter()
-					.map(convert_kv_metadata_v8_to_v6)
+					.map(convert_kv_metadata_v7_to_v6)
 					.collect(),
 			})
 		}
-		v8::KvResponseData::KvPutResponse => v6::KvResponseData::KvPutResponse,
-		v8::KvResponseData::KvDeleteResponse => v6::KvResponseData::KvDeleteResponse,
-		v8::KvResponseData::KvDropResponse => v6::KvResponseData::KvDropResponse,
+		v7::KvResponseData::KvPutResponse => v6::KvResponseData::KvPutResponse,
+		v7::KvResponseData::KvDeleteResponse => v6::KvResponseData::KvDeleteResponse,
+		v7::KvResponseData::KvDropResponse => v6::KvResponseData::KvDropResponse,
 	}
 }
 
-fn convert_kv_metadata_v6_to_v8(metadata: v6::KvMetadata) -> v8::KvMetadata {
-	v8::KvMetadata {
+fn convert_kv_metadata_v6_to_v7(metadata: v6::KvMetadata) -> v7::KvMetadata {
+	v7::KvMetadata {
 		version: metadata.version,
 		update_ts: metadata.update_ts,
 	}
 }
 
-fn convert_kv_metadata_v8_to_v6(metadata: v8::KvMetadata) -> v6::KvMetadata {
+fn convert_kv_metadata_v7_to_v6(metadata: v7::KvMetadata) -> v6::KvMetadata {
 	v6::KvMetadata {
 		version: metadata.version,
 		update_ts: metadata.update_ts,
@@ -4152,44 +4128,44 @@ fn convert_to_client_tunnel_message_kind_v6_to_v5(
 	}
 }
 
-fn convert_to_client_tunnel_message_kind_v5_to_v8(
+fn convert_to_client_tunnel_message_kind_v5_to_v7(
 	kind: v5::ToClientTunnelMessageKind,
-) -> v8::ToClientTunnelMessageKind {
-	convert_to_client_tunnel_message_kind_v6_to_v8(convert_to_client_tunnel_message_kind_v5_to_v6(
+) -> v7::ToClientTunnelMessageKind {
+	convert_to_client_tunnel_message_kind_v6_to_v7(convert_to_client_tunnel_message_kind_v5_to_v6(
 		kind,
 	))
 }
 
-fn convert_to_client_tunnel_message_kind_v8_to_v5(
-	kind: v8::ToClientTunnelMessageKind,
+fn convert_to_client_tunnel_message_kind_v7_to_v5(
+	kind: v7::ToClientTunnelMessageKind,
 ) -> v5::ToClientTunnelMessageKind {
-	convert_to_client_tunnel_message_kind_v6_to_v5(convert_to_client_tunnel_message_kind_v8_to_v6(
+	convert_to_client_tunnel_message_kind_v6_to_v5(convert_to_client_tunnel_message_kind_v7_to_v6(
 		kind,
 	))
 }
 
 fn convert_to_client_tunnel_message_kind_v4_to_v7(
 	kind: v4::ToClientTunnelMessageKind,
-) -> v8::ToClientTunnelMessageKind {
-	convert_to_client_tunnel_message_kind_v6_to_v8(convert_to_client_tunnel_message_kind_v4_to_v6(
+) -> v7::ToClientTunnelMessageKind {
+	convert_to_client_tunnel_message_kind_v6_to_v7(convert_to_client_tunnel_message_kind_v4_to_v6(
 		kind,
 	))
 }
 
 fn convert_to_client_tunnel_message_kind_v7_to_v4(
-	kind: v8::ToClientTunnelMessageKind,
+	kind: v7::ToClientTunnelMessageKind,
 ) -> v4::ToClientTunnelMessageKind {
-	convert_to_client_tunnel_message_kind_v6_to_v4(convert_to_client_tunnel_message_kind_v8_to_v6(
+	convert_to_client_tunnel_message_kind_v6_to_v4(convert_to_client_tunnel_message_kind_v7_to_v6(
 		kind,
 	))
 }
 
-fn convert_to_client_tunnel_message_kind_v6_to_v8(
+fn convert_to_client_tunnel_message_kind_v6_to_v7(
 	kind: v6::ToClientTunnelMessageKind,
-) -> v8::ToClientTunnelMessageKind {
+) -> v7::ToClientTunnelMessageKind {
 	match kind {
 		v6::ToClientTunnelMessageKind::ToClientRequestStart(req) => {
-			v8::ToClientTunnelMessageKind::ToClientRequestStart(v8::ToClientRequestStart {
+			v7::ToClientTunnelMessageKind::ToClientRequestStart(v7::ToClientRequestStart {
 				actor_id: req.actor_id,
 				method: req.method,
 				path: req.path,
@@ -4199,29 +4175,29 @@ fn convert_to_client_tunnel_message_kind_v6_to_v8(
 			})
 		}
 		v6::ToClientTunnelMessageKind::ToClientRequestChunk(chunk) => {
-			v8::ToClientTunnelMessageKind::ToClientRequestChunk(v8::ToClientRequestChunk {
+			v7::ToClientTunnelMessageKind::ToClientRequestChunk(v7::ToClientRequestChunk {
 				body: chunk.body,
 				finish: chunk.finish,
 			})
 		}
 		v6::ToClientTunnelMessageKind::ToClientRequestAbort => {
-			v8::ToClientTunnelMessageKind::ToClientRequestAbort
+			v7::ToClientTunnelMessageKind::ToClientRequestAbort
 		}
 		v6::ToClientTunnelMessageKind::ToClientWebSocketOpen(ws) => {
-			v8::ToClientTunnelMessageKind::ToClientWebSocketOpen(v8::ToClientWebSocketOpen {
+			v7::ToClientTunnelMessageKind::ToClientWebSocketOpen(v7::ToClientWebSocketOpen {
 				actor_id: ws.actor_id,
 				path: ws.path,
 				headers: ws.headers,
 			})
 		}
 		v6::ToClientTunnelMessageKind::ToClientWebSocketMessage(msg) => {
-			v8::ToClientTunnelMessageKind::ToClientWebSocketMessage(v8::ToClientWebSocketMessage {
+			v7::ToClientTunnelMessageKind::ToClientWebSocketMessage(v7::ToClientWebSocketMessage {
 				data: msg.data,
 				binary: msg.binary,
 			})
 		}
 		v6::ToClientTunnelMessageKind::ToClientWebSocketClose(close) => {
-			v8::ToClientTunnelMessageKind::ToClientWebSocketClose(v8::ToClientWebSocketClose {
+			v7::ToClientTunnelMessageKind::ToClientWebSocketClose(v7::ToClientWebSocketClose {
 				code: close.code,
 				reason: close.reason,
 			})
@@ -4229,11 +4205,11 @@ fn convert_to_client_tunnel_message_kind_v6_to_v8(
 	}
 }
 
-fn convert_to_client_tunnel_message_kind_v8_to_v6(
-	kind: v8::ToClientTunnelMessageKind,
+fn convert_to_client_tunnel_message_kind_v7_to_v6(
+	kind: v7::ToClientTunnelMessageKind,
 ) -> v6::ToClientTunnelMessageKind {
 	match kind {
-		v8::ToClientTunnelMessageKind::ToClientRequestStart(req) => {
+		v7::ToClientTunnelMessageKind::ToClientRequestStart(req) => {
 			v6::ToClientTunnelMessageKind::ToClientRequestStart(v6::ToClientRequestStart {
 				actor_id: req.actor_id,
 				method: req.method,
@@ -4243,53 +4219,43 @@ fn convert_to_client_tunnel_message_kind_v8_to_v6(
 				stream: req.stream,
 			})
 		}
-		v8::ToClientTunnelMessageKind::ToClientRequestChunk(chunk) => {
+		v7::ToClientTunnelMessageKind::ToClientRequestChunk(chunk) => {
 			v6::ToClientTunnelMessageKind::ToClientRequestChunk(v6::ToClientRequestChunk {
 				body: chunk.body,
 				finish: chunk.finish,
 			})
 		}
-		v8::ToClientTunnelMessageKind::ToClientRequestAbort => {
+		v7::ToClientTunnelMessageKind::ToClientRequestAbort => {
 			v6::ToClientTunnelMessageKind::ToClientRequestAbort
 		}
-		v8::ToClientTunnelMessageKind::ToClientWebSocketOpen(ws) => {
+		v7::ToClientTunnelMessageKind::ToClientWebSocketOpen(ws) => {
 			v6::ToClientTunnelMessageKind::ToClientWebSocketOpen(v6::ToClientWebSocketOpen {
 				actor_id: ws.actor_id,
 				path: ws.path,
 				headers: ws.headers,
 			})
 		}
-		v8::ToClientTunnelMessageKind::ToClientWebSocketMessage(msg) => {
+		v7::ToClientTunnelMessageKind::ToClientWebSocketMessage(msg) => {
 			v6::ToClientTunnelMessageKind::ToClientWebSocketMessage(v6::ToClientWebSocketMessage {
 				data: msg.data,
 				binary: msg.binary,
 			})
 		}
-		v8::ToClientTunnelMessageKind::ToClientWebSocketClose(close) => {
+		v7::ToClientTunnelMessageKind::ToClientWebSocketClose(close) => {
 			v6::ToClientTunnelMessageKind::ToClientWebSocketClose(v6::ToClientWebSocketClose {
 				code: close.code,
 				reason: close.reason,
 			})
 		}
-		v8::ToClientTunnelMessageKind::ToClientWebSocketDatagram(msg) => {
-			// A peer on an older protocol has no datagram, and no WebTransport
-			// either, so it would have received this over a reliable WebSocket
-			// regardless. Delivering it as one loses the drop semantics that
-			// peer could not have used anyway, rather than losing the pose.
-			v6::ToClientTunnelMessageKind::ToClientWebSocketMessage(v6::ToClientWebSocketMessage {
-				data: msg.data,
-				binary: true,
-			})
-		}
 	}
 }
 
-fn convert_to_server_tunnel_message_kind_v6_to_v8(
+fn convert_to_server_tunnel_message_kind_v6_to_v7(
 	kind: v6::ToServerTunnelMessageKind,
-) -> v8::ToServerTunnelMessageKind {
+) -> v7::ToServerTunnelMessageKind {
 	match kind {
 		v6::ToServerTunnelMessageKind::ToServerResponseStart(resp) => {
-			v8::ToServerTunnelMessageKind::ToServerResponseStart(v8::ToServerResponseStart {
+			v7::ToServerTunnelMessageKind::ToServerResponseStart(v7::ToServerResponseStart {
 				status: resp.status,
 				headers: resp.headers,
 				body: resp.body,
@@ -4297,32 +4263,32 @@ fn convert_to_server_tunnel_message_kind_v6_to_v8(
 			})
 		}
 		v6::ToServerTunnelMessageKind::ToServerResponseChunk(chunk) => {
-			v8::ToServerTunnelMessageKind::ToServerResponseChunk(v8::ToServerResponseChunk {
+			v7::ToServerTunnelMessageKind::ToServerResponseChunk(v7::ToServerResponseChunk {
 				body: chunk.body,
 				finish: chunk.finish,
 			})
 		}
 		v6::ToServerTunnelMessageKind::ToServerResponseAbort => {
-			v8::ToServerTunnelMessageKind::ToServerResponseAbort
+			v7::ToServerTunnelMessageKind::ToServerResponseAbort
 		}
 		v6::ToServerTunnelMessageKind::ToServerWebSocketOpen(open) => {
-			v8::ToServerTunnelMessageKind::ToServerWebSocketOpen(v8::ToServerWebSocketOpen {
+			v7::ToServerTunnelMessageKind::ToServerWebSocketOpen(v7::ToServerWebSocketOpen {
 				can_hibernate: open.can_hibernate,
 			})
 		}
 		v6::ToServerTunnelMessageKind::ToServerWebSocketMessage(msg) => {
-			v8::ToServerTunnelMessageKind::ToServerWebSocketMessage(v8::ToServerWebSocketMessage {
+			v7::ToServerTunnelMessageKind::ToServerWebSocketMessage(v7::ToServerWebSocketMessage {
 				data: msg.data,
 				binary: msg.binary,
 			})
 		}
 		v6::ToServerTunnelMessageKind::ToServerWebSocketMessageAck(ack) => {
-			v8::ToServerTunnelMessageKind::ToServerWebSocketMessageAck(
-				v8::ToServerWebSocketMessageAck { index: ack.index },
+			v7::ToServerTunnelMessageKind::ToServerWebSocketMessageAck(
+				v7::ToServerWebSocketMessageAck { index: ack.index },
 			)
 		}
 		v6::ToServerTunnelMessageKind::ToServerWebSocketClose(close) => {
-			v8::ToServerTunnelMessageKind::ToServerWebSocketClose(v8::ToServerWebSocketClose {
+			v7::ToServerTunnelMessageKind::ToServerWebSocketClose(v7::ToServerWebSocketClose {
 				code: close.code,
 				reason: close.reason,
 				hibernate: close.hibernate,
@@ -4331,11 +4297,11 @@ fn convert_to_server_tunnel_message_kind_v6_to_v8(
 	}
 }
 
-fn convert_to_server_tunnel_message_kind_v8_to_v6(
-	kind: v8::ToServerTunnelMessageKind,
+fn convert_to_server_tunnel_message_kind_v7_to_v6(
+	kind: v7::ToServerTunnelMessageKind,
 ) -> v6::ToServerTunnelMessageKind {
 	match kind {
-		v8::ToServerTunnelMessageKind::ToServerResponseStart(resp) => {
+		v7::ToServerTunnelMessageKind::ToServerResponseStart(resp) => {
 			v6::ToServerTunnelMessageKind::ToServerResponseStart(v6::ToServerResponseStart {
 				status: resp.status,
 				headers: resp.headers,
@@ -4343,46 +4309,36 @@ fn convert_to_server_tunnel_message_kind_v8_to_v6(
 				stream: resp.stream,
 			})
 		}
-		v8::ToServerTunnelMessageKind::ToServerResponseChunk(chunk) => {
+		v7::ToServerTunnelMessageKind::ToServerResponseChunk(chunk) => {
 			v6::ToServerTunnelMessageKind::ToServerResponseChunk(v6::ToServerResponseChunk {
 				body: chunk.body,
 				finish: chunk.finish,
 			})
 		}
-		v8::ToServerTunnelMessageKind::ToServerResponseAbort => {
+		v7::ToServerTunnelMessageKind::ToServerResponseAbort => {
 			v6::ToServerTunnelMessageKind::ToServerResponseAbort
 		}
-		v8::ToServerTunnelMessageKind::ToServerWebSocketOpen(open) => {
+		v7::ToServerTunnelMessageKind::ToServerWebSocketOpen(open) => {
 			v6::ToServerTunnelMessageKind::ToServerWebSocketOpen(v6::ToServerWebSocketOpen {
 				can_hibernate: open.can_hibernate,
 			})
 		}
-		v8::ToServerTunnelMessageKind::ToServerWebSocketMessage(msg) => {
+		v7::ToServerTunnelMessageKind::ToServerWebSocketMessage(msg) => {
 			v6::ToServerTunnelMessageKind::ToServerWebSocketMessage(v6::ToServerWebSocketMessage {
 				data: msg.data,
 				binary: msg.binary,
 			})
 		}
-		v8::ToServerTunnelMessageKind::ToServerWebSocketMessageAck(ack) => {
+		v7::ToServerTunnelMessageKind::ToServerWebSocketMessageAck(ack) => {
 			v6::ToServerTunnelMessageKind::ToServerWebSocketMessageAck(
 				v6::ToServerWebSocketMessageAck { index: ack.index },
 			)
 		}
-		v8::ToServerTunnelMessageKind::ToServerWebSocketClose(close) => {
+		v7::ToServerTunnelMessageKind::ToServerWebSocketClose(close) => {
 			v6::ToServerTunnelMessageKind::ToServerWebSocketClose(v6::ToServerWebSocketClose {
 				code: close.code,
 				reason: close.reason,
 				hibernate: close.hibernate,
-			})
-		}
-		v8::ToServerTunnelMessageKind::ToServerWebSocketDatagram(msg) => {
-			// A peer on an older protocol has no datagram, and no WebTransport
-			// either, so it would have received this over a reliable WebSocket
-			// regardless. Delivering it as one loses the drop semantics that
-			// peer could not have used anyway, rather than losing the pose.
-			v6::ToServerTunnelMessageKind::ToServerWebSocketMessage(v6::ToServerWebSocketMessage {
-				data: msg.data,
-				binary: true,
 			})
 		}
 	}
