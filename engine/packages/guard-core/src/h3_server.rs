@@ -20,15 +20,18 @@ use bytes::Bytes;
 use h3::server::Connection as H3Connection;
 use h3_webtransport::server::{AcceptedBi, WebTransportSession};
 use hyper::header::HeaderMap;
+use hyper_tungstenite::tungstenite::Message;
 use hyper_tungstenite::tungstenite::protocol::Role;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
 use std::sync::Arc;
+use futures_util::StreamExt;
 use tokio::io::AsyncReadExt;
 use tokio_tungstenite::WebSocketStream;
 
-use crate::websocket_handle::WebSocketHandle;
+use crate::datagram_transport::{SendOutcome, UnbufferedSink, resolve_outcome};
+use crate::websocket_handle::{BoxedWsStream, WebSocketHandle, WebSocketSender};
 
 /// ALPN identifier for HTTP/3. A QUIC client must offer this to reach the
 /// listener.
@@ -39,6 +42,14 @@ const STREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Upper bound on the routing path a stream may name.
 const MAX_STREAM_PATH_LEN: u16 = 2048;
+
+/// A stream whose target carries this query flag is served over QUIC datagrams
+/// rather than over the stream itself.
+///
+/// Unreliability is chosen per connection rather than per message, so the
+/// actor receives ordinary frames and never learns which transport carried
+/// them.
+const UNRELIABLE_FLAG: &str = "rivet_unreliable=1";
 
 /// The parts of the CONNECT request that opened a WebTransport session.
 ///
@@ -153,9 +164,11 @@ where
 					remote_addr,
 				};
 
-			let session = WebTransportSession::accept(req, stream, h3_conn)
-				.await
-				.context("failed to accept the WebTransport session")?;
+			let session = Arc::new(
+					WebTransportSession::accept(req, stream, h3_conn)
+						.await
+						.context("failed to accept the WebTransport session")?,
+				);
 
 			tracing::debug!(%path, "WebTransport session established");
 
@@ -168,7 +181,7 @@ where
 
 /// Accept bidirectional streams from a session and wrap each as a WebSocket.
 async fn serve_session<F>(
-	session: WebTransportSession<h3_quinn::Connection, Bytes>,
+	session: Arc<WebTransportSession<h3_quinn::Connection, Bytes>>,
 	req: WebTransportRequest,
 	on_websocket: WebSocketSink<F>,
 ) -> Result<()>
@@ -180,6 +193,7 @@ where
 			Result::Ok(Some(AcceptedBi::BidiStream(_session_id, mut stream))) => {
 				let req = req.clone();
 				let on_websocket = on_websocket.clone();
+				let session = session.clone();
 
 				tokio::spawn(async move {
 					// A session CONNECTs to one path, and streams inside it carry
@@ -196,16 +210,22 @@ where
 						}
 					};
 
-					let mut stream_req = req;
-					stream_req.path = path;
+					let unreliable = path.contains(UNRELIABLE_FLAG);
 
-					// `BidiStream` implements tokio's AsyncRead and AsyncWrite, so
-					// tungstenite drives it directly. The handshake already
-					// happened at the CONNECT layer, so the stream starts in the
-					// established state.
-					let ws_stream =
-						WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
-					let handle = WebSocketHandle::from_stream(ws_stream);
+					let mut stream_req = req;
+					stream_req.path = strip_unreliable_flag(&path);
+
+					let handle = if unreliable {
+						datagram_handle(&session)
+					} else {
+						// `BidiStream` implements tokio's AsyncRead and AsyncWrite,
+						// so tungstenite drives it directly. The handshake already
+						// happened at the CONNECT layer, so the stream starts in
+						// the established state.
+						let ws_stream =
+							WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
+						WebSocketHandle::from_stream(ws_stream)
+					};
 
 					on_websocket(handle, stream_req).await;
 				});
@@ -270,3 +290,83 @@ where
 #[cfg(test)]
 #[path = "h3_server/tests.rs"]
 mod tests;
+
+/// Remove the unreliable flag so routing sees an ordinary actor path.
+pub(crate) fn strip_unreliable_flag(path: &str) -> String {
+	let Some((base, query)) = path.split_once('?') else {
+		return path.to_string();
+	};
+
+	let rest: Vec<&str> = query
+		.split('&')
+		.filter(|part| *part != UNRELIABLE_FLAG)
+		.collect();
+
+	if rest.is_empty() {
+		base.to_string()
+	} else {
+		format!("{base}?{}", rest.join("&"))
+	}
+}
+
+/// Build a handle whose transport is the session's datagrams.
+fn datagram_handle(
+	session: &Arc<WebTransportSession<h3_quinn::Connection, Bytes>>,
+) -> WebSocketHandle {
+	let reader = session.datagram_reader();
+
+	// One datagram is one message. A ShaderMotion humanoid frame is around 260
+	// bytes, well inside a QUIC datagram, so nothing has to be reassembled and
+	// a loss costs exactly one frame rather than an undecodable fragment.
+	let rx = futures_util::stream::unfold(reader, |mut reader| async move {
+		match reader.read_datagram().await {
+			Result::Ok(datagram) => {
+				let payload = datagram.into_payload();
+				Some((Result::Ok(Message::Binary(payload)), reader))
+			}
+			Err(err) => {
+				tracing::debug!(?err, "datagram reader closed");
+				None
+			}
+		}
+	});
+
+	let mut sender = session.datagram_sender();
+	let tx = UnbufferedSink::new(move |msg: Message| {
+		let data = match msg {
+			Message::Binary(data) => data,
+			Message::Text(text) => Bytes::from(text.as_bytes().to_vec()),
+			// Ping, Pong and Close are stream-level concepts with no datagram
+			// equivalent, and a close has no ordering guarantee to rely on here.
+			_ => return Result::Ok(()),
+		};
+
+		let outcome = match sender.send_datagram(data) {
+			Result::Ok(()) => SendOutcome::Sent,
+			Err(err) => classify_send_error(&err),
+		};
+
+		resolve_outcome(outcome)
+	});
+
+	WebSocketHandle::from_parts(
+		Box::new(tx) as WebSocketSender,
+		Box::new(rx.boxed()) as BoxedWsStream,
+	)
+}
+
+/// Decide whether a failed datagram send ends the connection.
+fn classify_send_error(err: &impl std::fmt::Debug) -> SendOutcome {
+	let text = format!("{err:?}");
+
+	// Too large and not available are ordinary for an unreliable transport: the
+	// frame is dropped and the next one is already on its way. Anything else is
+	// a connection-level failure.
+	if text.contains("TooLarge") {
+		SendOutcome::Dropped("too large for one datagram")
+	} else if text.contains("NotAvailable") {
+		SendOutcome::Dropped("send window full")
+	} else {
+		SendOutcome::Fatal
+	}
+}

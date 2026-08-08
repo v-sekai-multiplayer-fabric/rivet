@@ -1,5 +1,6 @@
 pub mod cert_resolver;
 pub mod custom_serve;
+pub mod datagram_transport;
 pub mod errors;
 pub mod h3_server;
 pub mod metrics;

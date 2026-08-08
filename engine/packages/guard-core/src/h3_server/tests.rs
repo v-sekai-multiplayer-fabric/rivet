@@ -73,3 +73,21 @@ async fn a_truncated_header_is_rejected() {
 	let mut stream = Cursor::new(vec![0u8, 8u8, b'/', b'z']);
 	assert!(read_stream_path(&mut stream).await.is_err());
 }
+
+#[tokio::test]
+async fn the_unreliable_flag_is_stripped_before_routing() {
+	// Routing must see an ordinary actor path; the flag selects a transport and
+	// is not part of the actor's address.
+	use super::strip_unreliable_flag;
+
+	assert_eq!(
+		strip_unreliable_flag("/zone/motion?rivet_unreliable=1"),
+		"/zone/motion"
+	);
+	assert_eq!(
+		strip_unreliable_flag("/zone/motion?a=1&rivet_unreliable=1&b=2"),
+		"/zone/motion?a=1&b=2"
+	);
+	assert_eq!(strip_unreliable_flag("/zone/asset"), "/zone/asset");
+	assert_eq!(strip_unreliable_flag("/zone/asset?a=1"), "/zone/asset?a=1");
+}

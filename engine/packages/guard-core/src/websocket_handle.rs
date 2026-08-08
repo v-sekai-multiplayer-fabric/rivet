@@ -58,6 +58,18 @@ impl WebSocketHandle {
 		}
 	}
 
+	/// Build a handle from an already-split transport.
+	///
+	/// `from_stream` covers transports that are a single `AsyncRead + AsyncWrite`
+	/// object. A datagram transport is not one: its two halves come from
+	/// different objects on the QUIC session, so they arrive already split.
+	pub fn from_parts(ws_tx: WebSocketSender, ws_rx: BoxedWsStream) -> Self {
+		Self {
+			ws_tx: Arc::new(Mutex::new(ws_tx)),
+			ws_rx: Arc::new(Mutex::new(ws_rx.peekable())),
+		}
+	}
+
 	#[tracing::instrument(skip_all)]
 	pub async fn send(&self, message: Message) -> Result<()> {
 		let message_kind = message_kind_label(&message);
