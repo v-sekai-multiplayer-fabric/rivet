@@ -116,6 +116,30 @@ flyctl deploy . \
 	--ha=false \
 	--yes
 
+log "Writing the engine topology file"
+# The engine hands public_url to each envoy as x-rivet-endpoint, and the envoy
+# dials it. The default is http://127.0.0.1:6420, which an envoy resolves inside
+# its own container, so it must be the engine's 6PN address.
+#
+# This is a file because `topology.datacenters` deserializes through an untagged
+# enum that the env-var source cannot merge into. `name` is omitted because it
+# is derived from the map key and setting it is rejected.
+topology_json="$(python3 -c "
+import json
+print(json.dumps({'topology': {'datacenter_label': 1, 'datacenters': {'default': {
+    'datacenter_label': 1,
+    'is_leader': True,
+    'public_url': 'http://${ENGINE_APP}.internal:6420',
+    'peer_url': 'http://${ENGINE_APP}.internal:6421',
+}}}}, separators=(',', ':')))
+")"
+
+for machine in $(flyctl machine list --app "${ENGINE_APP}" --json \
+	| python3 -c 'import json,sys; [print(m["id"]) for m in json.load(sys.stdin)]'); do
+	flyctl machine update "${machine}" --app "${ENGINE_APP}" \
+		--file-literal "/etc/rivet/topology.json=${topology_json}" --yes
+done
+
 engine_host="${ENGINE_APP}.fly.dev"
 
 # --- Godot zone -------------------------------------------------------------

@@ -236,11 +236,43 @@ The stack was deployed to the `personal` org in `sjc`.
   default namespace, completes every startup backfill workflow, and serves
   `{"runtime":"engine","status":"ok","version":"2.3.7"}` on `/health`.
 
+The Godot zone runs as a Rivet actor end to end. Creating an actor cold starts
+the container, Godot boots and prints its ready line, the envoy connects, and an
+MCP call through the gateway reaches the live SceneTree:
+
+```
+POST https://mf-rivet-engine.fly.dev/request/mcp
+  x-rivet-target: actor
+  x-rivet-actor: 57c13zaqureq7pl93wm2qtcqmqbl00
+
+{"result":{"content":[{"text":"{\"engine\":{...\"string\":\"4.7.1-stable (official)\"},\"pong\":true}"}]}}
+```
+
 One measurement worth keeping: the first UDB read after startup,
 `engine_check_version_rollback`, logged `slow udb operation ... duration_ms=2200`.
 That is cold-start cost on an undersized cluster, not steady state, but it is the
 only latency number this RFD has and it is not a good one. Treat FDB latency on
 Fly as unmeasured until someone benchmarks it properly.
+
+### The engine must advertise a reachable endpoint
+
+`pegboard-outbound` sends the current datacenter's `public_url` to each envoy as
+`x-rivet-endpoint`, and the envoy dials it to open its WebSocket back. The
+default is `http://127.0.0.1:6420`, which an envoy resolves inside its own
+container, so every connection attempt fails with `Connection refused` while the
+engine itself looks healthy. It must be the engine's 6PN address.
+
+Two traps sit on top of that:
+
+- `topology.datacenters` deserializes through an untagged enum, so the env-var
+  source cannot merge into it. Setting `RIVET__TOPOLOGY__DATACENTERS__DEFAULT__*`
+  fails startup with `failed to deserialize config`, even with every required
+  field supplied. It has to be a config file.
+- In the map form, `name` is derived from the key, and setting it explicitly is
+  rejected with a validation error.
+
+A `[[files]]` block in `fly.toml` did not apply on deploy;
+`flyctl machine update --file-literal` does, and is what `deploy.sh` uses.
 
 ## Testing
 

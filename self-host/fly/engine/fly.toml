@@ -11,15 +11,21 @@ primary_region = "sjc"
   dockerfile = "Dockerfile"
 
 [env]
-  # The engine hands public_url to each envoy as x-rivet-endpoint, and the envoy
-  # dials it to open its WebSocket back. The default is http://127.0.0.1:6420,
-  # which an envoy resolves inside its own container, so it must be the engine's
-  # 6PN address instead.
-  RIVET__TOPOLOGY__DATACENTERS__DEFAULT__PUBLIC_URL = "http://mf-rivet-engine.internal:6420"
-  RIVET__TOPOLOGY__DATACENTERS__DEFAULT__PEER_URL = "http://mf-rivet-engine.internal:6421"
   RIVET__FOUNDATIONDB__CLUSTER_FILE_WRITE_PATH = "/etc/foundationdb/fdb.cluster"
   RIVET__FOUNDATIONDB__CLUSTER_DESCRIPTION = "rivet"
   RIVET__FOUNDATIONDB__CLUSTER_ID = "rivet"
+
+# The engine hands public_url to each envoy as x-rivet-endpoint, and the envoy
+# dials it to open its WebSocket back. The default is http://127.0.0.1:6420,
+# which an envoy resolves inside its own container, so it must be the engine's
+# 6PN address instead.
+#
+# This is a file rather than RIVET__TOPOLOGY__... env vars because `datacenters`
+# deserializes through an untagged enum, and the env source cannot merge into
+# it. Setting those vars fails startup with "failed to deserialize config".
+#
+# deploy.sh writes it with `flyctl machine update --file-literal`. A [[files]]
+# block here does not apply on deploy.
 
 [http_service]
   internal_port = 6420
