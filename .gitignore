@@ -116,3 +116,6 @@ container-runner/examples/unity-demo/.vsconfig
 
 # Short-lived WebTransport pinning certificates, regenerated on demand.
 .webtransport-certs/
+
+# Playwright MCP working files (screenshots, snapshots, console logs)
+.playwright-mcp/
