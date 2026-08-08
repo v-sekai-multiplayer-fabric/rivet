@@ -79,7 +79,7 @@ export default function App() {
 			objectUrl.current = URL.createObjectURL(blob);
 			setResult({
 				url: objectUrl.current,
-				name: file.name.replace(/\.glb$/i, "") + ".scn",
+				name: file.name.replace(/\.(glb|gltf)$/i, "") + ".scn",
 				bytes: blob.size,
 			});
 			setPhase("done");
@@ -112,9 +112,15 @@ export default function App() {
 
 				<label style={{ display: "block", marginBottom: "1rem" }}>
 					Model
+					<span style={{ display: "block", fontSize: ".85em", color: "#555" }}>
+						<code>.glb</code>, or <code>.gltf</code> with <strong>embedded</strong> buffers
+						(<code>data:</code> URIs). A <code>.gltf</code> that references a separate{" "}
+						<code>.bin</code> or loose textures will fail — only the one file you pick is
+						uploaded.
+					</span>
 					<input
 						type="file"
-						accept=".glb"
+						accept=".glb,.gltf"
 						onChange={(e) => setFile(e.target.files?.[0] ?? null)}
 						disabled={busy}
 						style={{ display: "block", marginTop: ".25rem" }}

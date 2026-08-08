@@ -6,8 +6,10 @@ extends MCPCommands
 ## already use, which is proxied by `container-runner` and reachable through
 ## Rivet's gateway.
 ##
-## Accepts `.glb` only. `.gltf` references external buffers and textures that a
-## single-file upload cannot carry, so it is not a supported input here.
+## Accepts self-contained glTF: `.glb`, or `.gltf` whose buffers are embedded as
+## `data:` URIs. A `.gltf` referencing sibling files fails in the converter with
+## `glTF: Binary file not found`, since only the uploaded file exists here. That
+## error is loud, so accepting `.gltf` costs nothing in silent corruption.
 ##
 ## Bytes move in chunks because MCP is JSON-RPC and JSON has no binary type.
 ## Each chunk is base64, which inflates by 4/3, so `CHUNK_BYTES` is chosen to
