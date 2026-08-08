@@ -113,3 +113,6 @@ container-runner/examples/unity-demo/packages-lock.json
 container-runner/examples/unity-demo/*.csproj
 container-runner/examples/unity-demo/*.sln
 container-runner/examples/unity-demo/.vsconfig
+
+# Short-lived WebTransport pinning certificates, regenerated on demand.
+.webtransport-certs/
