@@ -19,6 +19,7 @@ use anyhow::*;
 use bytes::Bytes;
 use h3::server::Connection as H3Connection;
 use h3_webtransport::server::{AcceptedBi, WebTransportSession};
+use hyper::header::HeaderMap;
 use hyper_tungstenite::tungstenite::protocol::Role;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -31,11 +32,22 @@ use crate::websocket_handle::WebSocketHandle;
 /// listener.
 pub const ALPN_H3: &[u8] = b"h3";
 
-/// Called once per accepted WebSocket-over-WebTransport stream.
+/// The parts of the CONNECT request that opened a WebTransport session.
 ///
-/// The `path` is the `:path` of the CONNECT request that opened the session,
-/// so routing can reuse whatever the TCP path already does with it.
-pub type WebSocketSink<F> = Arc<dyn Fn(WebSocketHandle, String) -> F + Send + Sync>;
+/// Routing needs the same inputs the TCP path uses, so the authority and
+/// headers travel alongside the path rather than the path alone.
+#[derive(Clone)]
+pub struct WebTransportRequest {
+	/// Includes path and query.
+	pub path: String,
+	/// Authority of the CONNECT request, used as the `Host` for routing.
+	pub authority: String,
+	pub headers: HeaderMap,
+	pub remote_addr: SocketAddr,
+}
+
+/// Called once per accepted WebSocket-over-WebTransport stream.
+pub type WebSocketSink<F> = Arc<dyn Fn(WebSocketHandle, WebTransportRequest) -> F + Send + Sync>;
 
 /// Turn a rustls config into one QUIC accepts.
 ///
@@ -73,7 +85,7 @@ where
 			let remote_addr = incoming.remote_address();
 			match incoming.await {
 				Result::Ok(conn) => {
-					if let Err(err) = serve_connection(conn, on_websocket).await {
+					if let Err(err) = serve_connection(conn, remote_addr, on_websocket).await {
 						tracing::warn!(?err, ?remote_addr, "h3 connection ended with an error");
 					}
 				}
@@ -89,7 +101,11 @@ where
 
 /// Drive one QUIC connection: accept CONNECT requests, promote each to a
 /// WebTransport session, then hand every bidirectional stream to the caller.
-async fn serve_connection<F>(conn: quinn::Connection, on_websocket: WebSocketSink<F>) -> Result<()>
+async fn serve_connection<F>(
+	conn: quinn::Connection,
+	remote_addr: SocketAddr,
+	on_websocket: WebSocketSink<F>,
+) -> Result<()>
 where
 	F: Future<Output = ()> + Send + 'static,
 {
@@ -112,7 +128,22 @@ where
 				.await
 				.context("failed to resolve the h3 request")?;
 
-			let path = req.uri().path().to_string();
+			let path = req
+				.uri()
+				.path_and_query()
+				.map(|pq| pq.as_str().to_string())
+				.unwrap_or_else(|| req.uri().path().to_string());
+				let authority = req
+					.uri()
+					.authority()
+					.map(|a| a.as_str().to_string())
+					.unwrap_or_default();
+				let wt_req = WebTransportRequest {
+					path: path.clone(),
+					authority,
+					headers: req.headers().clone(),
+					remote_addr,
+				};
 
 			let session = WebTransportSession::accept(req, stream, h3_conn)
 				.await
@@ -120,7 +151,7 @@ where
 
 			tracing::debug!(%path, "WebTransport session established");
 
-			serve_session(session, path, on_websocket).await
+			serve_session(session, wt_req, on_websocket).await
 		}
 		Result::Ok(None) => Ok(()),
 		Err(err) => Err(err).context("h3 accept failed"),
@@ -130,7 +161,7 @@ where
 /// Accept bidirectional streams from a session and wrap each as a WebSocket.
 async fn serve_session<F>(
 	session: WebTransportSession<h3_quinn::Connection, Bytes>,
-	path: String,
+	req: WebTransportRequest,
 	on_websocket: WebSocketSink<F>,
 ) -> Result<()>
 where
@@ -146,7 +177,7 @@ where
 				let ws_stream = WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
 				let handle = WebSocketHandle::from_stream(ws_stream);
 
-				let fut = on_websocket(handle, path.clone());
+				let fut = on_websocket(handle, req.clone());
 				tokio::spawn(fut);
 			}
 			Result::Ok(Some(AcceptedBi::Request(..))) => {

@@ -15,6 +15,7 @@ use tokio_rustls::TlsAcceptor;
 use tracing::Instrument;
 
 use crate::cert_resolver::{CertResolverFn, create_tls_config};
+use crate::h3_server::run_h3_listener;
 use crate::metrics;
 use crate::proxy_service::ProxyServiceFactory;
 use crate::route::{CacheKeyFn, RoutingFn};
@@ -51,7 +52,7 @@ pub async fn run_server(
 		let listener = tokio::net::TcpListener::bind(https_addr).await?;
 
 		// Configure TLS if resolver function is provided
-		let acceptor = if let Some(resolver_fn) = cert_resolver_fn {
+		let acceptor = if let Some(resolver_fn) = cert_resolver_fn.clone() {
 			// Create a TLS server config using our certificate resolver
 			let server_config = create_tls_config(resolver_fn);
 
@@ -70,6 +71,35 @@ pub async fn run_server(
 	} else {
 		(None, None, None, None)
 	};
+
+	// HTTP/3 listens on the HTTPS port over UDP, which is the conventional
+	// pairing, so no new configuration field is needed. It needs its own
+	// rustls config because QUIC requires an ALPN of `h3`.
+	if let (Some(https_addr), Some(factory), Some(resolver_fn)) =
+		(&https_addr, &https_factory, &cert_resolver_fn)
+	{
+		let h3_addr = *https_addr;
+		let h3_factory = factory.clone();
+		let h3_tls = create_tls_config(resolver_fn.clone());
+
+		let on_websocket = Arc::new(move |ws_handle, req| {
+			let factory = h3_factory.clone();
+			async move {
+				if let Err(err) = factory.serve_webtransport(req, ws_handle).await {
+					tracing::warn!(?err, "webtransport websocket ended with an error");
+				}
+			}
+		});
+
+		tokio::spawn(
+			async move {
+				if let Err(err) = run_h3_listener(h3_addr, h3_tls, on_websocket).await {
+					tracing::error!(?err, "h3 listener stopped");
+				}
+			}
+			.instrument(tracing::info_span!(parent: None, "h3_listener")),
+		);
+	}
 
 	let server = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
 	let graceful = hyper_util::server::graceful::GracefulShutdown::new();

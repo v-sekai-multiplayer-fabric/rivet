@@ -1943,6 +1943,44 @@ impl ProxyServiceFactory {
 	pub fn remaining_tasks(&self) -> usize {
 		self.state.tasks.remaining_tasks()
 	}
+
+	/// Serve one WebSocket that arrived over a WebTransport stream.
+	///
+	/// The TCP path builds its `RequestContext` from a hyper request. A
+	/// WebTransport stream has no request of its own, so the CONNECT request
+	/// that opened the session supplies the same fields.
+	pub async fn serve_webtransport(
+		&self,
+		req: crate::h3_server::WebTransportRequest,
+		ws_handle: WebSocketHandle,
+	) -> Result<()> {
+		let ray_id = Id::new_v1(self.state.config.dc_label());
+		let req_id = Id::new_v1(self.state.config.dc_label());
+
+		let mut req_ctx = RequestContext::new(
+			req.remote_addr,
+			ray_id,
+			req_id,
+			req.authority.clone(),
+			req.path.clone(),
+			hyper::Method::CONNECT,
+			req.headers.clone(),
+			true,
+			req.remote_addr.ip(),
+			Instant::now(),
+		);
+
+		match self.state.resolve_route(&mut req_ctx, false).await? {
+			ResolveRouteOutput::CustomServe(handler) => {
+				serve_custom_websocket(self.state.clone(), req_ctx, handler, ws_handle).await
+			}
+			ResolveRouteOutput::Target(_) => {
+				// Only actors are reachable this way. Forwarding to an upstream
+				// target needs a hyper client, which a QUIC stream has no path to.
+				bail!("webtransport routed to an upstream target, which is not supported")
+			}
+		}
+	}
 }
 
 #[cfg(test)]
