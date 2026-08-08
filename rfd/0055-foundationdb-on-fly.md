@@ -225,6 +225,23 @@ These are known and unresolved.
    process against its 4 GB recommendation, and the cluster says so in `status`.
    It runs, but this is not a load-bearing configuration.
 
+## Deployment results
+
+The stack was deployed to the `personal` org in `sjc`.
+
+- `mf-rivet-fdb` — 3 machines, 3 zones, `double` redundancy, fault tolerance of
+  1 machine. `status` reports the database available.
+- `mf-rivet-engine` — starts with
+  `database: Some(FoundationDb(...))` naming the three coordinators, creates the
+  default namespace, completes every startup backfill workflow, and serves
+  `{"runtime":"engine","status":"ok","version":"2.3.7"}` on `/health`.
+
+One measurement worth keeping: the first UDB read after startup,
+`engine_check_version_rollback`, logged `slow udb operation ... duration_ms=2200`.
+That is cold-start cost on an undersized cluster, not steady state, but it is the
+only latency number this RFD has and it is not a good one. Treat FDB latency on
+Fly as unmeasured until someone benchmarks it properly.
+
 ## Testing
 
 `engine/packages/universaldb/tests/fdb.rs` covers set/get roundtrip, missing
