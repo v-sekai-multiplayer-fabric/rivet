@@ -5,7 +5,6 @@ pub mod errors;
 pub mod h3_server;
 pub mod metrics;
 pub mod proxy_service;
-pub mod roq;
 pub mod request_context;
 mod response_body;
 mod route;

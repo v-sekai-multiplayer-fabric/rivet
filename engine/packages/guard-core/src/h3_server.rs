@@ -31,7 +31,6 @@ use tokio::io::AsyncReadExt;
 use tokio_tungstenite::WebSocketStream;
 
 use crate::datagram_transport::{SendOutcome, UnbufferedSink, resolve_outcome};
-use crate::roq::{self, RtpHeader, SequenceTracker};
 use crate::websocket_handle::{BoxedWsStream, WebSocketHandle, WebSocketSender};
 
 /// ALPN identifier for HTTP/3. A QUIC client must offer this to reach the
@@ -44,45 +43,13 @@ const STREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 /// Upper bound on the routing path a stream may name.
 const MAX_STREAM_PATH_LEN: u16 = 2048;
 
-/// What a channel promises about delivery.
-///
-/// A QUIC bidirectional stream already gives reliable and sequenced, so only
-/// the unreliable pair is expressed here. Reliable and unsequenced is
-/// deliberately absent: nothing in this system wants it, and a stream provides
-/// no way to offer it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Delivery {
-	/// Every datagram is delivered as it arrives, in whatever order it arrives.
-	Unsequenced,
-	/// A datagram older than the newest already delivered is dropped.
-	///
-	/// This is what a pose stream wants. A late pose has been superseded, and
-	/// applying it moves the avatar backwards.
-	Sequenced,
-}
-
-/// Dynamic RTP payload type for a channel carrying opaque application bytes.
-///
-/// 96 is the first value RFC 3551 leaves to dynamic assignment.
-const RTP_PAYLOAD_TYPE: u8 = 96;
-
-/// How many datagrams may queue for one channel before the router drops them.
-///
-/// Small on purpose. A queue that grows holds stale poses, and a stale pose is
-/// what this transport exists to discard.
-const DATAGRAM_CHANNEL_DEPTH: usize = 32;
-
 /// A stream whose target carries this query flag is served over QUIC datagrams
 /// rather than over the stream itself.
 ///
 /// Unreliability is chosen per connection rather than per message, so the
 /// actor receives ordinary frames and never learns which transport carried
 /// them.
-const UNRELIABLE_PREFIX: &str = "rivet_unreliable=";
-
-/// Ask for a sequenced unreliable channel: deliver a datagram only if it is
-/// newer than the last one delivered on that channel.
-const SEQUENCED_FLAG: &str = "rivet_sequenced=1";
+const UNRELIABLE_FLAG: &str = "rivet_unreliable=1";
 
 /// The parts of the CONNECT request that opened a WebTransport session.
 ///
@@ -221,16 +188,12 @@ async fn serve_session<F>(
 where
 	F: Future<Output = ()> + Send + 'static,
 {
-	// One router per session, owning the single datagram reader.
-	let router = Arc::new(DatagramRouter::start(session.clone()));
-
 	loop {
 		match session.accept_bi().await {
 			Result::Ok(Some(AcceptedBi::BidiStream(_session_id, mut stream))) => {
 				let req = req.clone();
 				let on_websocket = on_websocket.clone();
 				let session = session.clone();
-				let router = router.clone();
 
 				tokio::spawn(async move {
 					// A session CONNECTs to one path, and streams inside it carry
@@ -247,21 +210,13 @@ where
 						}
 					};
 
-					let channel = unreliable_channel(&path);
-					let delivery = if path.contains(SEQUENCED_FLAG) {
-						Delivery::Sequenced
-					} else {
-						Delivery::Unsequenced
-					};
+					let unreliable = path.contains(UNRELIABLE_FLAG);
 
 					let mut stream_req = req;
 					stream_req.path = strip_unreliable_flag(&path);
 
-					let handle = if let Some(channel) = channel {
-						// The stream carries only the routing header. Its
-						// payload then travels on the session's datagrams,
-						// tagged with this channel id.
-						router.handle(&session, channel, delivery).await
+					let handle = if unreliable {
+						datagram_handle(&session)
 					} else {
 						// `BidiStream` implements tokio's AsyncRead and AsyncWrite,
 						// so tungstenite drives it directly. The handshake already
@@ -336,19 +291,6 @@ where
 #[path = "h3_server/tests.rs"]
 mod tests;
 
-/// Read the unreliable channel id a stream names, if it names one.
-///
-/// `rivet_unreliable=7` asks for datagrams on channel 7. Absent, the stream is
-/// served reliably over itself.
-pub(crate) fn unreliable_channel(path: &str) -> Option<u16> {
-	let (_, query) = path.split_once('?')?;
-
-	query
-		.split('&')
-		.find_map(|part| part.strip_prefix(UNRELIABLE_PREFIX))
-		.and_then(|v| v.parse::<u16>().ok())
-}
-
 /// Remove the unreliable flag so routing sees an ordinary actor path.
 pub(crate) fn strip_unreliable_flag(path: &str) -> String {
 	let Some((base, query)) = path.split_once('?') else {
@@ -357,7 +299,7 @@ pub(crate) fn strip_unreliable_flag(path: &str) -> String {
 
 	let rest: Vec<&str> = query
 		.split('&')
-		.filter(|part| !part.starts_with(UNRELIABLE_PREFIX) && *part != SEQUENCED_FLAG)
+		.filter(|part| *part != UNRELIABLE_FLAG)
 		.collect();
 
 	if rest.is_empty() {
@@ -367,193 +309,50 @@ pub(crate) fn strip_unreliable_flag(path: &str) -> String {
 	}
 }
 
-/// Routes session datagrams to the connections that asked for them.
-///
-/// QUIC datagrams carry no stream identity, so a session has exactly one
-/// datagram channel at the protocol level. That is one fewer than needed: an
-/// avatar wants an unreliable pose channel *and* reliable channels beside it,
-/// all on one connection so they share a congestion controller.
-///
-/// So identity is added in the payload. Every datagram is a `u16` channel id
-/// followed by the message. Two bytes against a ~1200 byte datagram, and a
-/// ShaderMotion frame is ~260 bytes, so a frame still fits in one datagram and
-/// a loss still costs exactly one pose.
-///
-/// Reliable channels need none of this. Each one is its own bidirectional
-/// stream, already independent, already free of head-of-line blocking against
-/// the others.
-pub struct DatagramRouter {
-	channels: Arc<scc::HashMap<u16, ChannelSink>>,
-}
+/// Build a handle whose transport is the session's datagrams.
+fn datagram_handle(
+	session: &Arc<WebTransportSession<h3_quinn::Connection, Bytes>>,
+) -> WebSocketHandle {
+	let reader = session.datagram_reader();
 
-struct ChannelSink {
-	tx: tokio::sync::mpsc::Sender<Bytes>,
-	delivery: Delivery,
-	/// Rollover-aware view of the RTP sequence, for a sequenced channel.
-	sequence: Arc<tokio::sync::Mutex<SequenceTracker>>,
-}
-
-impl DatagramRouter {
-	/// Take ownership of the session's datagram reader and start demultiplexing.
-	///
-	/// One reader per session, not one per connection. Several readers on the
-	/// same session compete for the same datagrams, and each would see an
-	/// arbitrary subset.
-	pub fn start(session: Arc<WebTransportSession<h3_quinn::Connection, Bytes>>) -> Self {
-		let channels: Arc<scc::HashMap<u16, ChannelSink>> = Arc::new(scc::HashMap::new());
-		let reader_channels = channels.clone();
-
-		tokio::spawn(async move {
-			let mut reader = session.datagram_reader();
-
-			loop {
-				match reader.read_datagram().await {
-					Result::Ok(datagram) => {
-						let payload = datagram.into_payload();
-
-						// draft-ietf-avtcore-rtp-over-quic: a flow identifier,
-						// then a complete RTP packet.
-						let (flow_id, rtp) = match roq::parse_datagram(&payload) {
-							Result::Ok(parts) => parts,
-							Err(err) => {
-								tracing::debug!(?err, "dropping an unparseable RoQ datagram");
-								continue;
-							}
-						};
-
-						let header = match roq::parse_rtp(rtp) {
-							Result::Ok(h) => h,
-							Err(err) => {
-								tracing::debug!(?err, flow_id, "dropping a bad RTP packet");
-								continue;
-							}
-						};
-
-						let Result::Ok(channel) = u16::try_from(flow_id) else {
-							tracing::debug!(flow_id, "flow identifier outside the channel range");
-							continue;
-						};
-
-						let body = Bytes::copy_from_slice(&rtp[header.payload_offset..]);
-
-						let found = reader_channels
-							.read_async(&channel, |_, v| {
-								(v.tx.clone(), v.delivery, v.sequence.clone())
-							})
-							.await;
-
-						match found {
-							Some((tx, delivery, sequence)) => {
-								if delivery == Delivery::Sequenced
-									&& sequence.lock().await.accept(header.sequence).is_none()
-								{
-									tracing::trace!(
-										channel,
-										seq = header.sequence,
-										"dropped a superseded datagram"
-									);
-									continue;
-								}
-
-								// Drop rather than await. Waiting here would
-								// delay every other channel behind this one,
-								// which is the blocking this design exists to
-								// avoid.
-								if tx.try_send(body).is_err() {
-									tracing::trace!(
-										channel,
-										"dropped a datagram, receiver full or gone"
-									);
-								}
-							}
-							None => {
-								tracing::trace!(channel, "datagram for an unknown channel");
-							}
-						}
-					}
-					Err(err) => {
-						tracing::debug!(?err, "datagram reader closed");
-						break;
-					}
-				}
+	// One datagram is one message. A ShaderMotion humanoid frame is around 260
+	// bytes, well inside a QUIC datagram, so nothing has to be reassembled and
+	// a loss costs exactly one frame rather than an undecodable fragment.
+	let rx = futures_util::stream::unfold(reader, |mut reader| async move {
+		match reader.read_datagram().await {
+			Result::Ok(datagram) => {
+				let payload = datagram.into_payload();
+				Some((Result::Ok(Message::Binary(payload)), reader))
 			}
-		});
-
-		Self { channels }
-	}
-
-	/// Build a handle carrying one unreliable channel.
-	pub async fn handle(
-		&self,
-		session: &Arc<WebTransportSession<h3_quinn::Connection, Bytes>>,
-		channel: u16,
-		delivery: Delivery,
-	) -> WebSocketHandle {
-		let (tx, rx) = tokio::sync::mpsc::channel::<Bytes>(DATAGRAM_CHANNEL_DEPTH);
-		let _ = self
-			.channels
-			.insert_async(
-				channel,
-				ChannelSink {
-					tx,
-					delivery,
-					sequence: Arc::new(tokio::sync::Mutex::new(SequenceTracker::new())),
-				},
-			)
-			.await;
-
-		let rx_stream = tokio_stream::wrappers::ReceiverStream::new(rx)
-			.map(|b| Result::Ok(Message::Binary(b)));
-
-		let mut sender = session.datagram_sender();
-		let out_seq = Arc::new(std::sync::atomic::AtomicU64::new(1));
-		// One synchronisation source per channel, as RTP expects.
-		let ssrc = u32::from(channel) | 0x5256_0000;
-		let sink = UnbufferedSink::new(move |msg: Message| {
-			let body = match msg {
-				Message::Binary(data) => data,
-				Message::Text(text) => Bytes::from(text.as_bytes().to_vec()),
-				// Ping, Pong and Close are stream-level concepts. A datagram
-				// has no ordering to close in order with.
-				_ => return Result::Ok(()),
-			};
-
-			let seq = out_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u16;
-
-			let rtp = roq::build_rtp(
-				&RtpHeader {
-					sequence: seq,
-					// Sender wall clock, so a receiver can measure one-way
-					// delay without a separate timing channel.
-					timestamp: rivet_util::timestamp::now() as u32,
-					ssrc,
-					payload_type: RTP_PAYLOAD_TYPE,
-					marker: false,
-					payload_offset: roq::RTP_MIN_HEADER,
-				},
-				&body,
-			);
-
-			let mut framed = Vec::with_capacity(8 + rtp.len());
-			if let Err(err) = roq::encode_varint(u64::from(channel), &mut framed) {
-				tracing::debug!(?err, "could not encode the flow identifier");
-				return Result::Ok(());
+			Err(err) => {
+				tracing::debug!(?err, "datagram reader closed");
+				None
 			}
-			framed.extend_from_slice(&rtp);
+		}
+	});
 
-			let outcome = match sender.send_datagram(Bytes::from(framed)) {
-				Result::Ok(()) => SendOutcome::Sent,
-				Err(err) => classify_send_error(&err),
-			};
+	let mut sender = session.datagram_sender();
+	let tx = UnbufferedSink::new(move |msg: Message| {
+		let data = match msg {
+			Message::Binary(data) => data,
+			Message::Text(text) => Bytes::from(text.as_bytes().to_vec()),
+			// Ping, Pong and Close are stream-level concepts with no datagram
+			// equivalent, and a close has no ordering guarantee to rely on here.
+			_ => return Result::Ok(()),
+		};
 
-			resolve_outcome(outcome)
-		});
+		let outcome = match sender.send_datagram(data) {
+			Result::Ok(()) => SendOutcome::Sent,
+			Err(err) => classify_send_error(&err),
+		};
 
-		WebSocketHandle::from_parts(
-			Box::new(sink) as WebSocketSender,
-			Box::new(rx_stream.boxed()) as BoxedWsStream,
-		)
-	}
+		resolve_outcome(outcome)
+	});
+
+	WebSocketHandle::from_parts(
+		Box::new(tx) as WebSocketSender,
+		Box::new(rx.boxed()) as BoxedWsStream,
+	)
 }
 
 /// Decide whether a failed datagram send ends the connection.
