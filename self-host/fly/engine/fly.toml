@@ -13,6 +13,20 @@ primary_region = "sjc"
   RIVET__FOUNDATIONDB__CLUSTER_DESCRIPTION = "rivet"
   RIVET__FOUNDATIONDB__CLUSTER_ID = "rivet"
 
+  # Guard terminates QUIC itself. Fly's edge terminates TLS for TCP only and
+  # forwards UDP as raw packets, so the handshake happens in this container and
+  # the private key has to be here.
+  RIVET__GUARD__HTTPS__PORT = "443"
+  RIVET__GUARD__HTTPS__TLS__ACTOR_CERT_PATH = "/etc/rivet/tls/actor.crt"
+  RIVET__GUARD__HTTPS__TLS__ACTOR_KEY_PATH = "/etc/rivet/tls/actor.key"
+  RIVET__GUARD__HTTPS__TLS__API_CERT_PATH = "/etc/rivet/tls/api.crt"
+  RIVET__GUARD__HTTPS__TLS__API_KEY_PATH = "/etc/rivet/tls/api.key"
+
+  # Fly routes UDP to this address only. A bind to 0.0.0.0 makes Linux reply
+  # from the wrong source address, so the listener would start and never
+  # complete a handshake.
+  RIVET__GUARD__HTTPS__QUIC_HOST = "fly-global-services"
+
 # The engine hands public_url to each envoy as x-rivet-endpoint, and the envoy
 # dials it to open its WebSocket back. The default is http://127.0.0.1:6420,
 # which an envoy resolves inside its own container, so it must be the engine's
@@ -43,6 +57,23 @@ primary_region = "sjc"
   method = "GET"
   timeout = "5s"
   path = "/health"
+
+# HTTP/3 over UDP, for WebTransport. This needs a dedicated IPv4 on the app:
+#
+#   flyctl ips allocate-v4 --app mf-rivet-engine
+#
+# UDP does not work on a shared IPv4 and does not work on IPv6 at all. Without
+# the dedicated address the listener still starts and no packet ever arrives,
+# so the failure is silent.
+#
+# The internal port equals the external port on purpose. Fly rewrites the IP
+# address of a UDP packet but not the port.
+[[services]]
+  internal_port = 443
+  protocol = "udp"
+
+  [[services.ports]]
+    port = 443
 
 [[vm]]
   size = "shared-cpu-2x"
