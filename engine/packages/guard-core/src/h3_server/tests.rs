@@ -141,7 +141,7 @@ async fn a_newer_sequence_is_accepted() {
 
 	assert!(seq_newer(1, 0));
 	assert!(seq_newer(100, 99));
-	assert!(seq_newer(30_000, 1));
+	assert!(seq_newer(u64::MAX, u64::MAX - 1));
 }
 
 #[tokio::test]
@@ -164,15 +164,19 @@ async fn the_same_sequence_twice_is_rejected() {
 }
 
 #[tokio::test]
-async fn sequences_keep_working_after_they_wrap() {
+async fn the_sequence_is_wide_enough_never_to_wrap() {
 	use super::seq_newer;
 
-	// A u16 at 64 Hz wraps about every 17 minutes. A plain `>` would discard
-	// every datagram for half a cycle after each wrap, so the stream would
-	// freeze for eight minutes at a time.
-	assert!(seq_newer(0, 65_535));
-	assert!(seq_newer(5, 65_530));
-	assert!(!seq_newer(65_530, 5));
+	// A 64-bit counter at 64 Hz runs for about nine billion years, so wrapping
+	// is not a case to handle. A narrower counter would be: a u16 wraps every
+	// 17 minutes, and a plain `>` would then discard everything for half a
+	// cycle, freezing the stream on a timer long after anything looked wrong.
+	let years = (u64::MAX as f64) / 64.0 / (365.25 * 24.0 * 3600.0);
+	assert!(years > 1.0e9, "a u64 sequence lasts {years:e} years at 64 Hz");
+
+	// A high sequence still compares correctly, which a wrapping scheme would
+	// have had to prove separately.
+	assert!(seq_newer(1_000_000_000_000, 999_999_999_999));
 }
 
 #[tokio::test]

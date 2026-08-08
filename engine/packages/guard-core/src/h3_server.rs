@@ -60,6 +60,12 @@ pub enum Delivery {
 	Sequenced,
 }
 
+/// Bytes before the payload: a `u16` channel, then a `u64` sequence.
+///
+/// Ten bytes against a datagram of roughly 1200, and a ShaderMotion humanoid
+/// frame is about 260, so a frame still travels in one datagram.
+const DATAGRAM_HEADER_LEN: usize = 10;
+
 /// How many datagrams may queue for one channel before the router drops them.
 ///
 /// Small on purpose. A queue that grows holds stale poses, and a stale pose is
@@ -384,15 +390,18 @@ struct ChannelSink {
 	tx: tokio::sync::mpsc::Sender<Bytes>,
 	delivery: Delivery,
 	/// Highest sequence delivered so far, for a sequenced channel.
-	last_seq: Arc<std::sync::atomic::AtomicU32>,
+	last_seq: Arc<std::sync::atomic::AtomicU64>,
 }
 
-/// Compare two sequence numbers that wrap.
+/// Is this datagram newer than the newest already delivered?
 ///
-/// A `u16` at 64 Hz wraps about every 17 minutes, so a plain `>` would discard
-/// every datagram for half a cycle after each wrap.
-fn seq_newer(candidate: u16, last: u16) -> bool {
-	candidate != last && candidate.wrapping_sub(last) < u16::MAX / 2
+/// The sequence is 64 bits, so it does not wrap in any lifetime that matters:
+/// at 64 Hz a `u64` lasts on the order of nine billion years. A narrower
+/// counter would need wrapping-distance comparison, because a plain `>` after
+/// a wrap discards everything for half a cycle. Eight bytes buys the removal
+/// of that whole class of bug.
+fn seq_newer(candidate: u64, last: u64) -> bool {
+	candidate > last
 }
 
 impl DatagramRouter {
@@ -412,7 +421,7 @@ impl DatagramRouter {
 				match reader.read_datagram().await {
 					Result::Ok(datagram) => {
 						let payload = datagram.into_payload();
-						if payload.len() < 4 {
+						if payload.len() < DATAGRAM_HEADER_LEN {
 							tracing::debug!(
 								len = payload.len(),
 								"dropping a datagram too short to carry a channel and sequence"
@@ -421,8 +430,12 @@ impl DatagramRouter {
 						}
 
 						let channel = u16::from_be_bytes([payload[0], payload[1]]);
-						let seq = u16::from_be_bytes([payload[2], payload[3]]);
-						let body = payload.slice(4..);
+						let seq = u64::from_be_bytes(
+							payload[2..DATAGRAM_HEADER_LEN]
+								.try_into()
+								.expect("slice is exactly eight bytes"),
+						);
+						let body = payload.slice(DATAGRAM_HEADER_LEN..);
 
 						let found = reader_channels
 							.read_async(&channel, |_, v| {
@@ -433,9 +446,8 @@ impl DatagramRouter {
 						match found {
 							Some((tx, delivery, last_seq)) => {
 								if delivery == Delivery::Sequenced {
-									let last = last_seq
-										.load(std::sync::atomic::Ordering::Relaxed)
-										as u16;
+									let last =
+										last_seq.load(std::sync::atomic::Ordering::Relaxed);
 									if !seq_newer(seq, last) {
 										tracing::trace!(
 											channel,
@@ -446,7 +458,7 @@ impl DatagramRouter {
 										continue;
 									}
 									last_seq.store(
-										seq as u32,
+										seq,
 										std::sync::atomic::Ordering::Relaxed,
 									);
 								}
@@ -493,7 +505,7 @@ impl DatagramRouter {
 				ChannelSink {
 					tx,
 					delivery,
-					last_seq: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+					last_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
 				},
 			)
 			.await;
@@ -502,7 +514,8 @@ impl DatagramRouter {
 			.map(|b| Result::Ok(Message::Binary(b)));
 
 		let mut sender = session.datagram_sender();
-		let out_seq = Arc::new(std::sync::atomic::AtomicU32::new(0));
+		// Starts at 1 so the first datagram is newer than the initial zero.
+		let out_seq = Arc::new(std::sync::atomic::AtomicU64::new(1));
 		let sink = UnbufferedSink::new(move |msg: Message| {
 			let body = match msg {
 				Message::Binary(data) => data,
@@ -515,9 +528,9 @@ impl DatagramRouter {
 			// channel, sequence, then the message. The sequence is always
 			// present so both modes share one wire format; an unsequenced
 			// receiver ignores it.
-			let seq = out_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u16;
+			let seq = out_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-			let mut framed = Vec::with_capacity(4 + body.len());
+			let mut framed = Vec::with_capacity(DATAGRAM_HEADER_LEN + body.len());
 			framed.extend_from_slice(&channel.to_be_bytes());
 			framed.extend_from_slice(&seq.to_be_bytes());
 			framed.extend_from_slice(&body);
