@@ -1,8 +1,8 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use futures_util::FutureExt;
+use futures_util::{FutureExt, TryStreamExt};
 use gas::prelude::*;
-use rivet_types::{keys, runner_configs::RunnerConfigKind};
+use rivet_types::runner_configs::RunnerConfigKind;
 use universaldb::prelude::*;
 
 use super::{runner_pool_error_tracker, runner_pool_metadata_poller, serverless};
@@ -209,44 +209,13 @@ enum ReadDesiredOutput {
 #[activity(ReadDesired)]
 async fn read_desired(ctx: &ActivityCtx, input: &ReadDesiredInput) -> Result<ReadDesiredOutput> {
 	let udb_pool = ctx.udb()?;
-	let (runner_config_res, desired_slots) = tokio::try_join!(
+	let (runner_config_res, demand_slots) = tokio::try_join!(
 		ctx.op(crate::ops::runner_config::get::Input {
 			runners: vec![(input.namespace_id, input.runner_name.clone())],
 			bypass_cache: false,
 		}),
-		udb_pool.txn("pegboard_runner_pool_read_desired_slots", |tx| async move {
-			let tx = tx.with_subspace(keys::pegboard::subspace());
-
-			let key = keys::pegboard::ns::ServerlessDesiredSlotsKey {
-				namespace_id: input.namespace_id,
-				runner_name: input.runner_name.clone(),
-			};
-			let desired_slots = tx.read_opt(&key, Serializable).await?.unwrap_or_default();
-
-			// Antifragile floor. This counter is edge-triggered: +1 when an actor
-			// takes a serverless slot (actor/runtime.rs) and -1 on destroy
-			// (actor/destroy.rs, which fires even for an actor destroyed while
-			// pending allocation). Under churn a decrement can race ahead of its
-			// matching increment and drive the counter negative. Reading a negative
-			// value and clamping the desired count to zero (below) is correct for
-			// the tick, but leaving the stored counter negative makes the zero
-			// permanent: no later increment can lift it back above zero, so the pool
-			// silently wedges forever. That jam is a reachable, absorbing sink,
-			// machine-checked in serverless_pool_jam.lean (`counter_can_jam`,
-			// `jam_is_sink`). A negative value is impossible in correct operation, so
-			// heal it in place instead of persisting the sink: clear the key so live
-			// demand re-scales the pool from zero on the next bump.
-			if desired_slots < 0 {
-				tracing::warn!(
-					namespace_id = %input.namespace_id,
-					runner_name = %input.runner_name,
-					?desired_slots,
-					"serverless desired slots drifted negative; healing to 0"
-				);
-				tx.delete(&key);
-			}
-
-			Ok(desired_slots.max(0))
+		udb_pool.txn("pegboard_runner_pool_read_demand", |tx| async move {
+			count_demand_slots(&tx, input.namespace_id, &input.runner_name).await
 		}),
 	)?;
 	let Some(runner_config) = runner_config_res.into_iter().next() else {
@@ -275,30 +244,24 @@ async fn read_desired(ctx: &ActivityCtx, input: &ReadDesiredInput) -> Result<Rea
 		});
 	}
 
-	let adjusted_desired_slots = if desired_slots < 0 {
-		tracing::error!(
-			namespace_id=%input.namespace_id,
-			runner_name=%input.runner_name,
-			?desired_slots,
-			"negative desired slots, scaling to 0"
-		);
-		0
-	} else {
-		desired_slots
-	};
+	// Level-triggered reconciliation: desired runners is derived every tick from
+	// the observed live demand (`count_demand_slots`), never from an accumulated
+	// counter. Because demand is recomputed from the source-of-truth indexes it
+	// cannot drift below reality, so the pool cannot wedge at zero while actors
+	// wait. See serverless_pool_jam.lean (`reconciler_never_jams`).
+	let demand_slots = u32::try_from(demand_slots).unwrap_or(u32::MAX);
 
 	// Won't overflow as these values are all in u32 range
-	let desired_count = (runners_margin
-		+ (adjusted_desired_slots as u32).div_ceil(slots_per_runner.max(1)))
-	.max(min_runners)
-	.min(max_runners)
-	.min(
-		ctx.config()
-			.pegboard()
-			.pool_desired_max_override
-			.unwrap_or(u32::MAX),
-	)
-	.try_into()?;
+	let desired_count = (runners_margin + demand_slots.div_ceil(slots_per_runner.max(1)))
+		.max(min_runners)
+		.min(max_runners)
+		.min(
+			ctx.config()
+				.pegboard()
+				.pool_desired_max_override
+				.unwrap_or(u32::MAX),
+		)
+		.try_into()?;
 
 	// Compute consistent hash of serverless details
 	let mut hasher = DefaultHasher::new();
@@ -312,6 +275,59 @@ async fn read_desired(ctx: &ActivityCtx, input: &ReadDesiredInput) -> Result<Rea
 		desired_count,
 		details_hash,
 	})
+}
+
+/// Counts the live serverless demand for a runner pool, in slots: actors waiting
+/// in the pending queue plus actors already running on the pool's runners
+/// (counted as used slots). This is the level-triggered source of truth that
+/// replaces the drift-prone `ServerlessDesiredSlotsKey` counter. Overcounting is
+/// safe (an extra runner drains on the next tick); undercounting would drain a
+/// runner hosting a live actor, so transient pending/running overlap biases the
+/// count upward by design.
+async fn count_demand_slots(
+	tx: &universaldb::Transaction,
+	namespace_id: Id,
+	runner_name: &str,
+) -> Result<u64> {
+	let tx = tx.with_subspace(crate::keys::subspace());
+
+	// Actors waiting for a slot.
+	let pending_subspace = crate::keys::subspace().subspace(
+		&crate::keys::ns::PendingActorByRunnerNameSelectorKey::subspace(
+			namespace_id,
+			runner_name.to_string(),
+		),
+	);
+	let mut pending = 0u64;
+	let mut pending_stream = tx.get_ranges_keyvalues(
+		universaldb::RangeOption {
+			mode: StreamingMode::WantAll,
+			..(&pending_subspace).into()
+		},
+		Snapshot,
+	);
+	while pending_stream.try_next().await?.is_some() {
+		pending += 1;
+	}
+
+	// Actors already allocated on this pool's runners, counted as used slots.
+	let alloc_subspace = crate::keys::subspace().subspace(
+		&crate::keys::ns::RunnerAllocIdxKey::subspace(namespace_id, runner_name.to_string()),
+	);
+	let mut running = 0u64;
+	let mut alloc_stream = tx.get_ranges_keyvalues(
+		universaldb::RangeOption {
+			mode: StreamingMode::WantAll,
+			..(&alloc_subspace).into()
+		},
+		Snapshot,
+	);
+	while let Some(entry) = alloc_stream.try_next().await? {
+		let (_, data) = tx.read_entry::<crate::keys::ns::RunnerAllocIdxKey>(&entry)?;
+		running += u64::from(data.total_slots.saturating_sub(data.remaining_slots));
+	}
+
+	Ok(pending + running)
 }
 
 #[signal("pegboard_runner_pool_bump")]
