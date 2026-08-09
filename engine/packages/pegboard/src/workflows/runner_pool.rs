@@ -217,17 +217,36 @@ async fn read_desired(ctx: &ActivityCtx, input: &ReadDesiredInput) -> Result<Rea
 		udb_pool.txn("pegboard_runner_pool_read_desired_slots", |tx| async move {
 			let tx = tx.with_subspace(keys::pegboard::subspace());
 
-			let desired_slots = tx
-				.read_opt(
-					&keys::pegboard::ns::ServerlessDesiredSlotsKey {
-						namespace_id: input.namespace_id,
-						runner_name: input.runner_name.clone(),
-					},
-					Serializable,
-				)
-				.await?;
+			let key = keys::pegboard::ns::ServerlessDesiredSlotsKey {
+				namespace_id: input.namespace_id,
+				runner_name: input.runner_name.clone(),
+			};
+			let desired_slots = tx.read_opt(&key, Serializable).await?.unwrap_or_default();
 
-			Ok(desired_slots.unwrap_or_default())
+			// Antifragile floor. This counter is edge-triggered: +1 when an actor
+			// takes a serverless slot (actor/runtime.rs) and -1 on destroy
+			// (actor/destroy.rs, which fires even for an actor destroyed while
+			// pending allocation). Under churn a decrement can race ahead of its
+			// matching increment and drive the counter negative. Reading a negative
+			// value and clamping the desired count to zero (below) is correct for
+			// the tick, but leaving the stored counter negative makes the zero
+			// permanent: no later increment can lift it back above zero, so the pool
+			// silently wedges forever. That jam is a reachable, absorbing sink,
+			// machine-checked in serverless_pool_jam.lean (`counter_can_jam`,
+			// `jam_is_sink`). A negative value is impossible in correct operation, so
+			// heal it in place instead of persisting the sink: clear the key so live
+			// demand re-scales the pool from zero on the next bump.
+			if desired_slots < 0 {
+				tracing::warn!(
+					namespace_id = %input.namespace_id,
+					runner_name = %input.runner_name,
+					?desired_slots,
+					"serverless desired slots drifted negative; healing to 0"
+				);
+				tx.delete(&key);
+			}
+
+			Ok(desired_slots.max(0))
 		}),
 	)?;
 	let Some(runner_config) = runner_config_res.into_iter().next() else {
