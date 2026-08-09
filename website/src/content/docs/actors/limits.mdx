@@ -37,7 +37,7 @@ These limits affect actions that use `.connect()` and [low-level WebSockets](/do
 
 *WebSocket hibernation is in beta and disabled by default.*
 
-Hibernating WebSockets allow actors to sleep while keeping client connections alive. All WebSocket limits above also apply to hibernating WebSockets. See [WebSocket Hibernation](/docs/actors/websocket-handler#web-socket-hibernation) for details.
+Hibernating WebSockets allow actors to sleep while keeping client connections alive. All WebSocket limits above also apply to hibernating WebSockets. See [WebSocket Hibernation](/docs/actors/websocket-handler#websocket-hibernation) for details.
 
 | Name | Soft Limit | Hard Limit | Description |
 |------|------------|------------|-------------|
@@ -83,7 +83,7 @@ These limits apply to the low-level KV storage interface powering Rivet Actors. 
 
 ### Actor SQLite Storage
 
-These limits apply to the [SQLite database](/docs/actors/state#sqlite-database) available via `this.sql`. SQLite data is stored through the KV layer, so the storage limit is shared with KV storage.
+These limits apply to the [SQLite database](/docs/actors/state#embedded-sqlite) available via `c.db`. SQLite data is stored through the KV layer, so the storage limit is shared with KV storage.
 
 | Name | Soft Limit | Hard Limit | Description |
 |------|------------|------------|-------------|

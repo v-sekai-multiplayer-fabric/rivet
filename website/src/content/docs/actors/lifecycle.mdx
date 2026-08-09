@@ -104,7 +104,7 @@ The `createState` function dynamically initializes state based on input. Called 
 
 ### `vars`
 
-The `vars` constant defines ephemeral variables for the actor. These variables are not persisted and are useful for storing runtime-only data. The value for `vars` must be clonable via `structuredClone`. See [ephemeral variables documentation](/docs/actors/state#ephemeral-variables) for more information.
+The `vars` constant defines ephemeral variables for the actor. These variables are not persisted and are useful for storing runtime-only data. The value for `vars` must be clonable via `structuredClone`. See [ephemeral variables documentation](/docs/actors/state#ephemeral-state) for more information.
 
 <CodeSnippet file="examples/docs/actors-lifecycle/vars.ts" />
 
@@ -112,7 +112,7 @@ The `vars` constant defines ephemeral variables for the actor. These variables a
 
 [API Reference](/typedoc/interfaces/rivetkit.mod.ActorDefinition.html)
 
-The `createVars` function dynamically initializes ephemeral variables. Can be async. Use this when you need to initialize values at runtime. See [ephemeral variables documentation](/docs/actors/state#ephemeral-variables) for more information.
+The `createVars` function dynamically initializes ephemeral variables. Can be async. Use this when you need to initialize values at runtime. See [ephemeral variables documentation](/docs/actors/state#ephemeral-state) for more information.
 
 <CodeSnippet file="examples/docs/actors-lifecycle/create-vars.ts" />
 
