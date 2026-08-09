@@ -1,0 +1,18 @@
+[package]
+name = "rivet-fabric-datagram-protocol"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+edition.workspace = true
+description = "Fork-only unreliable datagram tunnel protocol, versioned independently of envoy-protocol"
+
+[dependencies]
+anyhow.workspace = true
+serde_bare.workspace = true
+serde.workspace = true
+vbare.workspace = true
+
+[build-dependencies]
+vbare-compiler.workspace = true

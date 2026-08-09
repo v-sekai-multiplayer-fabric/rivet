@@ -5738,6 +5738,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rivet-fabric-datagram-protocol"
+version = "2.3.7"
+dependencies = [
+ "anyhow",
+ "rivet-vbare-compiler",
+ "serde",
+ "serde_bare",
+ "vbare",
+]
+
+[[package]]
 name = "rivet-guard"
 version = "2.3.7"
 dependencies = [

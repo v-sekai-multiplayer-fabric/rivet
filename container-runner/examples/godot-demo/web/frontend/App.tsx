@@ -7,6 +7,11 @@ import { callTool, fromBase64, toBase64 } from "./mcp.ts";
 // container-runner, so there is no TypeScript registry to type against.
 const ENGINE = import.meta.env.VITE_RIVET_ENDPOINT ?? "http://localhost:6420";
 const ACTOR_NAME = import.meta.env.VITE_ACTOR_NAME ?? "game";
+// The serverless runner pool the actor is created in. Becomes
+// `runner_name_selector` on the engine; without it the client defaults to
+// "default" and the engine has no such runner, so allocation fails with
+// "no_capacity".
+const POOL = import.meta.env.VITE_RIVET_POOL ?? "game";
 
 const client = createClient(ENGINE) as any;
 
@@ -36,7 +41,7 @@ export default function App() {
 		if (!file) return;
 		reset();
 
-		const actor = client[ACTOR_NAME].getOrCreate([zoneKey]);
+		const actor = client[ACTOR_NAME].getOrCreate([zoneKey], { poolName: POOL });
 
 		try {
 			// 1. Begin. The zone chooses the chunk size, so the page never

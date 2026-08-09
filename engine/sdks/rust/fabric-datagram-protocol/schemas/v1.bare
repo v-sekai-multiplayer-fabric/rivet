@@ -1,0 +1,43 @@
+# Fork datagram tunnel extension.
+#
+# This is a separate protocol crate with its own version sequence, deliberately
+# not a new envoy-protocol version. envoy-protocol's version integer is upstream
+# Rivet's namespace; bumping it on the fork collides with upstream's next
+# version on rebase. A standalone crate versioned from v1 never collides, so the
+# fork can carry this over stacked patches on upstream main.
+#
+# Carried on a dedicated, capability-negotiated datagram channel between Guard
+# and pegboard-envoy, alongside the reliable envoy-protocol WebSocket tunnel.
+# The channel is unreliable and bidirectional: no acknowledgement, no ordering,
+# no retransmission. A pose that arrives late is worse than one that never
+# arrives, because a newer pose has already superseded it. Dropping late data is
+# the feature, so unlike ToRivetWebSocketMessage there is deliberately no
+# ...DatagramAck.
+
+# Identifies the actor connection (WebTransport session) a datagram belongs to,
+# so the tunnel routes it to the right actor or client. Same width as
+# envoy-protocol's RequestId.
+type RequestId data[4]
+
+# Guard -> actor: one client datagram, delivered best-effort.
+type ToEnvoyDatagram struct {
+	requestId: RequestId
+	payload: data
+}
+
+# Actor -> Guard: one broadcast datagram, delivered best-effort.
+type ToRivetDatagram struct {
+	requestId: RequestId
+	payload: data
+}
+
+# Top-level message toward the actor. A union so control frames can be added
+# later without a new envoy-protocol version.
+type ToEnvoy union {
+	ToEnvoyDatagram
+}
+
+# Top-level message toward Guard.
+type ToRivet union {
+	ToRivetDatagram
+}
