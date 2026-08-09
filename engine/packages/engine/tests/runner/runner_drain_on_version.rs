@@ -123,9 +123,9 @@ fn drain_on_version_upgrade_normal_runner() {
 		datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -207,9 +207,9 @@ fn drain_on_version_upgrade_disabled_normal_runner() {
 		datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: false,
+				drain_on_version_upgrade: Some(false),
 			},
 		);
 
@@ -314,15 +314,19 @@ fn drain_on_version_upgrade_serverless_runner() {
 					headers: None,
 					request_lifespan: 30,
 					max_concurrent_actors: Some(5),
-					drain_grace_period: None,
-					slots_per_runner: 10,
+					drain_grace_period: Some(5),
+					slots_per_runner: Some(10),
 					min_runners: Some(1),
-					max_runners: 5,
+					max_runners: Some(5),
 					runners_margin: Some(2),
 					metadata_poll_interval: None,
+					drain_on_version_upgrade: None,
+					actor_eviction_delay: None,
+					actor_eviction_period: None,
+					actor_eviction_rate: None,
 				},
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -398,9 +402,9 @@ fn drain_on_version_upgrade_multiple_older_versions() {
 		datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -567,15 +571,19 @@ fn drain_on_version_upgrade_via_metadata_polling() {
 							headers: None,
 							request_lifespan: 30,
 							max_concurrent_actors: Some(5),
-							drain_grace_period: None,
-							slots_per_runner: 10,
+							drain_grace_period: Some(5),
+							slots_per_runner: Some(10),
 							min_runners: Some(0),
-							max_runners: 0,
+							max_runners: Some(0),
 							runners_margin: Some(0),
 							metadata_poll_interval: Some(1000),
+							drain_on_version_upgrade: None,
+							actor_eviction_delay: None,
+							actor_eviction_period: None,
+							actor_eviction_rate: None,
 						},
 					metadata: None,
-					drain_on_version_upgrade: true,
+					drain_on_version_upgrade: Some(true),
 				},
 			);
 

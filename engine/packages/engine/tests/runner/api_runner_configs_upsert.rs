@@ -17,9 +17,9 @@ fn upsert_runner_config_normal_single_dc() {
 		datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -44,7 +44,7 @@ fn upsert_runner_config_normal_single_dc() {
 
 #[test]
 fn upsert_runner_config_normal_multiple_dcs() {
-	common::run(common::TestOpts::new(2), |ctx| async move {
+	common::run(common::TestOpts::new(2).with_timeout(30), |ctx| async move {
 		let (namespace, _, _) = common::setup_test_namespace_with_runner(ctx.leader_dc()).await;
 
 		let runner_name = "multi-dc-runner";
@@ -52,17 +52,17 @@ fn upsert_runner_config_normal_multiple_dcs() {
 		datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 		datacenters.insert(
 			"dc-2".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -102,15 +102,19 @@ fn upsert_runner_config_serverless() {
 					headers: None,
 					request_lifespan: 30,
 					max_concurrent_actors: Some(5),
-					drain_grace_period: None,
-					slots_per_runner: 10,
+					drain_grace_period: Some(5),
+					slots_per_runner: Some(10),
 					min_runners: Some(1),
-					max_runners: 5,
+					max_runners: Some(5),
 					runners_margin: Some(2),
 					metadata_poll_interval: None,
+					drain_on_version_upgrade: None,
+					actor_eviction_delay: None,
+					actor_eviction_period: None,
+					actor_eviction_rate: None,
 				},
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -144,9 +148,9 @@ fn upsert_runner_config_update_existing() {
 		datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -172,9 +176,9 @@ fn upsert_runner_config_update_existing() {
 		datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: Some(serde_json::json!({"test": "value"})),
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -206,9 +210,9 @@ fn upsert_runner_config_returns_endpoint_changed() {
 		datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -254,9 +258,9 @@ fn upsert_runner_config_with_metadata() {
 		datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: Some(metadata_value),
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -294,17 +298,17 @@ fn upsert_runner_config_removes_missing_dcs() {
 		datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 		datacenters.insert(
 			"dc-2".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -328,9 +332,9 @@ fn upsert_runner_config_removes_missing_dcs() {
 		datacenters_dc1_only.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -394,9 +398,9 @@ fn upsert_runner_config_empty_map_deletes_all() {
 		datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -468,9 +472,9 @@ fn upsert_runner_config_non_existent_namespace() {
 		datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -494,7 +498,7 @@ fn upsert_runner_config_non_existent_namespace() {
 
 #[test]
 fn upsert_runner_config_overwrites_different_variant() {
-	common::run(common::TestOpts::new(1), |ctx| async move {
+	common::run(common::TestOpts::new(1).with_timeout(30), |ctx| async move {
 		let (namespace, _, _) = common::setup_test_namespace_with_runner(ctx.leader_dc()).await;
 
 		let runner_name = "variant-change-test";
@@ -504,9 +508,9 @@ fn upsert_runner_config_overwrites_different_variant() {
 		datacenters_normal.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -535,15 +539,19 @@ fn upsert_runner_config_overwrites_different_variant() {
 					headers: None,
 					request_lifespan: 30,
 					max_concurrent_actors: Some(5),
-					drain_grace_period: None,
-					slots_per_runner: 10,
+					drain_grace_period: Some(5),
+					slots_per_runner: Some(10),
 					min_runners: Some(1),
-					max_runners: 5,
+					max_runners: Some(5),
 					runners_margin: Some(2),
 					metadata_poll_interval: None,
+					drain_on_version_upgrade: None,
+					actor_eviction_delay: None,
+					actor_eviction_period: None,
+					actor_eviction_rate: None,
 				},
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -576,9 +584,9 @@ fn upsert_runner_config_idempotent() {
 		datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -637,15 +645,19 @@ fn upsert_runner_config_serverless_slots_per_runner_zero() {
 					headers: None,
 					request_lifespan: 30,
 					max_concurrent_actors: Some(5),
-					drain_grace_period: None,
-					slots_per_runner: 0, // Invalid: should be rejected
+					drain_grace_period: Some(5),
+					slots_per_runner: Some(0), // Invalid: should be rejected
 					min_runners: Some(1),
-					max_runners: 5,
+					max_runners: Some(5),
 					runners_margin: Some(2),
 					metadata_poll_interval: None,
+					drain_on_version_upgrade: None,
+					actor_eviction_delay: None,
+					actor_eviction_period: None,
+					actor_eviction_rate: None,
 				},
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -686,14 +698,18 @@ fn upsert_runner_config_serverless_drain_grace_period_exceeds_actor_stop_thresho
 					request_lifespan: 30,
 					max_concurrent_actors: Some(5),
 					drain_grace_period: Some(30 * 60 + 1),
-					slots_per_runner: 1,
+					slots_per_runner: Some(1),
 					min_runners: Some(1),
-					max_runners: 5,
+					max_runners: Some(5),
 					runners_margin: Some(2),
 					metadata_poll_interval: None,
+					drain_on_version_upgrade: None,
+					actor_eviction_delay: None,
+					actor_eviction_period: None,
+					actor_eviction_rate: None,
 				},
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 

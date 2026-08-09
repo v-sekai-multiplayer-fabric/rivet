@@ -53,9 +53,9 @@ fn list_runner_names_with_pagination() {
 			datacenters.insert(
 				"dc-1".to_string(),
 				rivet_api_types::namespaces::runner_configs::RunnerConfig {
-					kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+					kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 					metadata: None,
-					drain_on_version_upgrade: true,
+					drain_on_version_upgrade: Some(true),
 				},
 			);
 
@@ -136,9 +136,9 @@ fn list_runner_names_pagination_no_duplicates_comprehensive() {
 			datacenters.insert(
 				"dc-1".to_string(),
 				rivet_api_types::namespaces::runner_configs::RunnerConfig {
-					kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+					kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 					metadata: None,
-					drain_on_version_upgrade: true,
+					drain_on_version_upgrade: Some(true),
 				},
 			);
 
@@ -347,9 +347,9 @@ fn list_runner_names_alphabetical_sorting() {
 			datacenters.insert(
 				"dc-1".to_string(),
 				rivet_api_types::namespaces::runner_configs::RunnerConfig {
-					kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+					kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 					metadata: None,
-					drain_on_version_upgrade: true,
+					drain_on_version_upgrade: Some(true),
 				},
 			);
 

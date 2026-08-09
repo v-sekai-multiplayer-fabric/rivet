@@ -39,9 +39,9 @@ fn list_runner_configs_single_runner() {
 		datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -97,9 +97,9 @@ fn list_runner_configs_multiple_runners() {
 			datacenters.insert(
 				"dc-1".to_string(),
 				rivet_api_types::namespaces::runner_configs::RunnerConfig {
-					kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+					kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 					metadata: None,
-					drain_on_version_upgrade: true,
+					drain_on_version_upgrade: Some(true),
 				},
 			);
 
@@ -150,17 +150,17 @@ fn list_runner_configs_multiple_dcs() {
 		datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 		datacenters.insert(
 			"dc-2".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -258,9 +258,9 @@ fn list_runner_configs_filter_by_name() {
 			datacenters.insert(
 				"dc-1".to_string(),
 				rivet_api_types::namespaces::runner_configs::RunnerConfig {
-					kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+					kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 					metadata: None,
-					drain_on_version_upgrade: true,
+					drain_on_version_upgrade: Some(true),
 				},
 			);
 
@@ -309,9 +309,9 @@ fn list_runner_configs_filter_by_variant_normal() {
 		datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -367,15 +367,19 @@ fn list_runner_configs_filter_by_variant_serverless() {
 					headers: Some(headers),
 					request_lifespan: 300,
 					max_concurrent_actors: Some(5),
-					drain_grace_period: None,
-					slots_per_runner: 10,
+					drain_grace_period: Some(5),
+					slots_per_runner: Some(10),
 					min_runners: Some(1),
-					max_runners: 5,
+					max_runners: Some(5),
 					runners_margin: Some(2),
 					metadata_poll_interval: None,
+					drain_on_version_upgrade: None,
+					actor_eviction_delay: None,
+					actor_eviction_period: None,
+					actor_eviction_rate: None,
 				},
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -507,15 +511,19 @@ fn list_runner_configs_validates_returned_data() {
 					headers: Some(headers),
 					request_lifespan: 600,
 					max_concurrent_actors: Some(5),
-					drain_grace_period: None,
-					slots_per_runner: 20,
+					drain_grace_period: Some(5),
+					slots_per_runner: Some(20),
 					min_runners: Some(2),
-					max_runners: 10,
+					max_runners: Some(10),
 					runners_margin: Some(3),
 					metadata_poll_interval: None,
+					drain_on_version_upgrade: None,
+					actor_eviction_delay: None,
+					actor_eviction_period: None,
+					actor_eviction_rate: None,
 				},
 				metadata: Some(serde_json::json!({"key": "value"})),
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -592,9 +600,9 @@ fn list_runner_configs_mixed_variants() {
 		normal_datacenters.insert(
 			"dc-1".to_string(),
 			rivet_api_types::namespaces::runner_configs::RunnerConfig {
-				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal {},
+				kind: rivet_api_types::namespaces::runner_configs::RunnerConfigKind::Normal { drain_on_version_upgrade: None, actor_eviction_delay: None, actor_eviction_period: None, actor_eviction_rate: None },
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
@@ -625,15 +633,19 @@ fn list_runner_configs_mixed_variants() {
 					headers: Some(headers),
 					request_lifespan: 300,
 					max_concurrent_actors: Some(5),
-					drain_grace_period: None,
-					slots_per_runner: 10,
+					drain_grace_period: Some(5),
+					slots_per_runner: Some(10),
 					min_runners: Some(1),
-					max_runners: 5,
+					max_runners: Some(5),
 					runners_margin: Some(2),
 					metadata_poll_interval: None,
+					drain_on_version_upgrade: None,
+					actor_eviction_delay: None,
+					actor_eviction_period: None,
+					actor_eviction_rate: None,
 				},
 				metadata: None,
-				drain_on_version_upgrade: true,
+				drain_on_version_upgrade: Some(true),
 			},
 		);
 
